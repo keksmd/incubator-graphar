@@ -1,0 +1,13 @@
+edges:
+  - person_knows_person.edge.yaml
+extra_info:
+  - key: category
+    value: test graph
+labels:
+  - ldbc
+  - sample
+name: ldbc_sample
+prefix: file:///test_path
+version: gar/v1
+vertices:
+  - person.vertex.yaml

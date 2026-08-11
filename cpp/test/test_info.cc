@@ -63,6 +63,29 @@ TEST_CASE_METHOD(GlobalFixture, "InfoVersion") {
   }
 }
 
+TEST_CASE_METHOD(GlobalFixture,
+                 "Load pure-Java metadata compatibility fixture") {
+  auto source_root = std::filesystem::path(__FILE__).parent_path();
+  source_root = source_root.parent_path().parent_path();
+  const auto fixture_path = source_root /
+      "maven-projects/info/src/test/resources/metadata-tck/"
+      "ldbc_sample.graph.yaml";
+  auto maybe_graph_info = GraphInfo::Load(fixture_path.string());
+
+  INFO(maybe_graph_info.status().message());
+  REQUIRE(!maybe_graph_info.has_error());
+  auto graph_info = maybe_graph_info.value();
+  REQUIRE(graph_info->GetName() == "ldbc_sample");
+  REQUIRE(graph_info->GetLabels() ==
+          std::vector<std::string>({"ldbc", "sample"}));
+  REQUIRE(graph_info->GetExtraInfo().at("category") == "test graph");
+
+  auto maybe_email_type =
+      graph_info->GetVertexInfo("person")->GetPropertyType("emails");
+  REQUIRE(!maybe_email_type.has_error());
+  REQUIRE(maybe_email_type.value()->Equals(list(string())));
+}
+
 TEST_CASE_METHOD(GlobalFixture, "Property") {
   Property p0("p0", int32(), true);
   Property p1("p1", int32(), false);
