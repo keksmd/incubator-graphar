@@ -17,3 +17,10 @@ This version is implemented using FastFFI to bridge Java and C++ code. While fun
 This is the next generation of the GraphAr Java library, being actively developed to provide a pure Java implementation without native dependencies.
 
 Currently, only the `graphar-info` module has been implemented in pure Java, which provides the ability to parse graph info (schema). Additional modules such as IO and high level API will be provided progressively.
+
+The implementation initiative is governed by these documents:
+
+- [Architecture](./architecture.md)
+- [Format invariants](./format-invariants.md)
+- [Compatibility contract](./compatibility.md)
+- [Roadmap](./roadmap.md)

@@ -20,6 +20,10 @@
 package org.apache.graphar.info;
 
 import java.net.URI;
+import java.util.List;
+import org.apache.graphar.info.type.AdjListType;
+import org.apache.graphar.info.type.DataType;
+import org.apache.graphar.info.type.FileType;
 import org.apache.graphar.info.yaml.VertexYaml;
 import org.junit.Assert;
 import org.junit.Test;
@@ -91,5 +95,42 @@ public class GraphInfoUriTest {
         Assert.assertEquals(
                 URI.create("file:///tmp/vertex/person/firstName_lastName_gender/chunk0"),
                 vertexInfo.getPropertyGroupChunkUri(vertexInfo.getPropertyGroups().get(1), 0));
+    }
+
+    @Test
+    public void testEdgePathsNormalizePrefixesWithoutTrailingSlashes() {
+        PropertyGroup propertyGroup =
+                new PropertyGroup(
+                        List.of(new Property("created", DataType.STRING, false, false)),
+                        FileType.PARQUET,
+                        "created");
+        EdgeInfo edgeInfo =
+                new EdgeInfo(
+                        "person",
+                        "knows",
+                        "person",
+                        1024,
+                        100,
+                        100,
+                        false,
+                        "edge/person_knows_person",
+                        "gar/v1",
+                        List.of(
+                                new AdjacentList(
+                                        AdjListType.ordered_by_source,
+                                        FileType.PARQUET,
+                                        "ordered_by_source")),
+                        List.of(propertyGroup));
+
+        Assert.assertEquals(
+                URI.create("edge/person_knows_person/ordered_by_source/edge_count2"),
+                edgeInfo.getEdgesNumFileUri(AdjListType.ordered_by_source, 2));
+        Assert.assertEquals(
+                URI.create("edge/person_knows_person/ordered_by_source/adj_list/part2/chunk1"),
+                edgeInfo.getAdjacentListChunkUri(AdjListType.ordered_by_source, 2, 1));
+        Assert.assertEquals(
+                URI.create("edge/person_knows_person/ordered_by_source/created/part2/chunk1"),
+                edgeInfo.getPropertyGroupChunkUri(
+                        propertyGroup, AdjListType.ordered_by_source, 2, 1));
     }
 }
