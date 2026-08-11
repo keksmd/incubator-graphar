@@ -18,3 +18,4 @@
 - Once upstream review starts, keep that PR's scope fixed: make only reviewer-requested changes relevant to its slice. Continue subsequent work in the fork.
 - Promote only mature, standalone fork slices upstream at a measured cadence. Cut each upstream candidate from current `upstream/main` with the minimal needed commits; do not create an upstream PR for every fork commit or build a dependent PR chain.
 - Never include `tasks/`, internal process records, or fork-only links in an Apache PR.
+- Before every upstream commit or force-push, run `pre-commit run --files` on the exact changed paths. If a formatter edits files, rerun it until it passes; mark the PR checklist only with the hook result actually obtained.

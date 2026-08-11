@@ -20,6 +20,9 @@ The published devcontainer image `ghcr.io/apache/graphar-dev:latest` is cached l
 
 # Pure-Java SDK bootstrap
 
+- [x] Repair Apache PR #946 verification: run the repository pre-commit hooks on its clean Java diff and close the Codecov gap with targeted tests.
+- [x] Re-run the full Java verification in the declared devcontainer and inspect the resulting coverage report before updating the PR branch.
+
 - [x] Repair Apache PR #946 branch hygiene: retain only the focused edge-layout implementation and tests; keep internal task/process records in the product fork.
 
 - [x] Phase 0: publish the architecture, compatibility contract, format invariants, and delivery roadmap.
@@ -34,3 +37,5 @@ The published devcontainer image `ghcr.io/apache/graphar-dev:latest` is cached l
 ## Review
 
 Phase 0 documents live under `docs/libraries/java/` and are linked from the Java library overview. The product fork advances independently and keeps small upstreamable commits alongside any product-only work. Apache contributions are a separate issue-first track: architecture umbrella [#756](https://github.com/apache/incubator-graphar/issues/756), compatibility/TCK umbrella [#944](https://github.com/apache/incubator-graphar/issues/944), reader/writer umbrella [#947](https://github.com/apache/incubator-graphar/issues/947), and focused edge-layout gate [#943](https://github.com/apache/incubator-graphar/issues/943). Phase 1a makes `EdgeInfo` C++-compatible: counts and offsets resolve below the adjacency prefix, topology resolves as `adj_list/part{vertexChunk}/chunk{edgeChunk}`, and edge properties resolve below the selected adjacency layout with the same tuple. The test suite proves these suffixes against the real Parquet fixture, including `part2/chunk1`, and covers prefixes without trailing slashes. The Java metadata fixture now emits `list<string>` as well as labels and extra metadata. The resulting full devcontainer `mvn clean verify` passed 128 tests with zero failures, errors, or skips.
+
+For Apache PR #946, the exact three-file diff passed `pre-commit run --files` (gitleaks and `Spotless java-info`) before the amended commit was pushed. The clean devcontainer `mvn clean verify` then passed 124 tests with zero failures, errors, or skips. JaCoCo reports the changed `EdgeInfo.resolvePath` helper with zero missed instructions, branches, and lines.
