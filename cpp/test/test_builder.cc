@@ -157,7 +157,7 @@ TEST_CASE_METHOD(GlobalFixture, "Test_vertices_builder") {
   REQUIRE(graphar::util::OpenParquetArrowReader(
               parquet_file, arrow::default_memory_pool(), &parquet_reader)
               .ok());
-  auto maybe_parquet_table = parquet_reader->ReadTable();
+  auto maybe_parquet_table = ReadParquetTable(parquet_reader.get());
   REQUIRE(maybe_parquet_table.ok());
   auto parquet_table = maybe_parquet_table.ValueOrDie();
   auto parquet_metadata = parquet_reader->parquet_reader()->metadata();
@@ -176,7 +176,7 @@ TEST_CASE_METHOD(GlobalFixture, "Test_vertices_builder") {
 
   auto id_col = parquet_table->GetColumnByName("id");
 
-  auto maybe_name_table = name_reader->ReadTable();
+  auto maybe_name_table = ReadParquetTable(name_reader.get());
   REQUIRE(maybe_name_table.ok());
   auto name_table = maybe_name_table.ValueOrDie();
   auto name_col = name_table->GetColumnByName("firstName");
@@ -315,7 +315,7 @@ TEST_CASE_METHOD(GlobalFixture, "test_edges_builder") {
     REQUIRE(graphar::util::OpenParquetArrowReader(
                 parquet_file, arrow::default_memory_pool(), &reader)
                 .ok());
-    auto maybe_table = reader->ReadTable();
+    auto maybe_table = ReadParquetTable(reader.get());
     REQUIRE(maybe_table.ok());
     auto table = maybe_table.ValueOrDie();
     auto col = table->GetColumnByName("creationDate");
@@ -364,7 +364,7 @@ TEST_CASE_METHOD(GlobalFixture, "test_edges_builder") {
   REQUIRE(graphar::util::OpenParquetArrowReader(
               parquet_file, arrow::default_memory_pool(), &parquet_reader)
               .ok());
-  auto maybe_parquet_table = parquet_reader->ReadTable();
+  auto maybe_parquet_table = ReadParquetTable(parquet_reader.get());
   REQUIRE(maybe_parquet_table.ok());
   auto parquet_table = maybe_parquet_table.ValueOrDie();
   auto parquet_metadata = parquet_reader->parquet_reader()->metadata();

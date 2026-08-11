@@ -99,12 +99,16 @@ Status EnsureDatasetScannerInitialized() {
   static bool initialized = false;
   static Status init_status = Status::OK();
   if (!initialized) {
+#if ARROW_VERSION >= 21000000
     auto st = arrow::compute::Initialize();
     if (!st.ok()) {
       init_status = Status::ArrowError(st.ToString());
     } else {
       arrow::dataset::internal::Initialize();
     }
+#else
+    arrow::dataset::internal::Initialize();
+#endif
     initialized = true;
   }
   return init_status;
@@ -141,6 +145,15 @@ Result<std::shared_ptr<arrow::Table>> FileSystem::ReadFileToTable(
   }
   builder.memory_pool(arrow::default_memory_pool());
   GAR_RETURN_ON_ARROW_ERROR_AND_ASSIGN(auto reader, builder.Build());
+#if defined(ARROW_VERSION) && ARROW_VERSION <= 20000000
+  std::shared_ptr<arrow::Table> table;
+  if (column_indices.empty()) {
+    RETURN_NOT_ARROW_OK(reader->ReadTable(&table));
+    return table;
+  }
+  RETURN_NOT_ARROW_OK(reader->ReadTable(column_indices, &table));
+  return table;
+#else
   if (column_indices.empty()) {
     GAR_RETURN_ON_ARROW_ERROR_AND_ASSIGN(auto table, reader->ReadTable());
     return table;
@@ -148,6 +161,7 @@ Result<std::shared_ptr<arrow::Table>> FileSystem::ReadFileToTable(
   GAR_RETURN_ON_ARROW_ERROR_AND_ASSIGN(auto table,
                                        reader->ReadTable(column_indices));
   return table;
+#endif
 }
 
 Result<std::shared_ptr<arrow::Table>> FileSystem::ReadFileToTable(
