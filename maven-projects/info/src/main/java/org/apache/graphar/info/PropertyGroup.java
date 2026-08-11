@@ -208,6 +208,19 @@ class PropertyGroups {
                         newProperties));
     }
 
+    Optional<PropertyGroups> removePropertyGroupAsNew(PropertyGroup propertyGroup) {
+        if (propertyGroup == null || !hasPropertyGroup(propertyGroup)) {
+            return Optional.empty();
+        }
+        return Optional.of(
+                new PropertyGroups(
+                        propertyGroupList.stream()
+                                .filter(
+                                        existingPropertyGroup ->
+                                                existingPropertyGroup != propertyGroup)
+                                .collect(Collectors.toUnmodifiableList())));
+    }
+
     boolean hasProperty(String propertyName) {
         return properties.containsKey(propertyName);
     }
@@ -247,6 +260,13 @@ class PropertyGroups {
     PropertyGroup getPropertyGroup(String propertyName) {
         checkPropertyExist(propertyName);
         return propertyGroupMap.get(propertyName);
+    }
+
+    PropertyGroup getPropertyGroupByIndex(int index) {
+        if (index < 0 || index >= propertyGroupList.size()) {
+            return null;
+        }
+        return propertyGroupList.get(index);
     }
 
     private void checkPropertyExist(String propertyName) {

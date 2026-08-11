@@ -423,6 +423,23 @@ public class EdgeInfo {
                                         newPropertyGroups));
     }
 
+    public Optional<EdgeInfo> removePropertyGroupAsNew(PropertyGroup propertyGroup) {
+        return propertyGroups
+                .removePropertyGroupAsNew(propertyGroup)
+                .map(
+                        newPropertyGroups ->
+                                new EdgeInfo(
+                                        edgeTriplet,
+                                        chunkSize,
+                                        srcChunkSize,
+                                        dstChunkSize,
+                                        directed,
+                                        baseUri,
+                                        version,
+                                        adjacentLists,
+                                        newPropertyGroups));
+    }
+
     public boolean hasAdjListType(AdjListType adjListType) {
         return adjacentLists.containsKey(adjListType);
     }
@@ -461,6 +478,10 @@ public class EdgeInfo {
 
     public PropertyGroup getPropertyGroup(String property) {
         return propertyGroups.getPropertyGroup(property);
+    }
+
+    public PropertyGroup getPropertyGroupByIndex(int index) {
+        return propertyGroups.getPropertyGroupByIndex(index);
     }
 
     public URI getPropertyGroupUri(PropertyGroup propertyGroup, AdjListType adjListType) {

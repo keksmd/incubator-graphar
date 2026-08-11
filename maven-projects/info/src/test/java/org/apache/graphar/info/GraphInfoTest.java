@@ -99,6 +99,9 @@ public class GraphInfoTest {
         Assert.assertEquals(1, graphInfo.getVertexInfos().size());
         Assert.assertEquals(1, graphInfo.getVertexInfoNum());
         Assert.assertEquals(personVertexInfo, graphInfo.getVertexInfo("person"));
+        Assert.assertEquals(personVertexInfo, graphInfo.getVertexInfoByIndex(0));
+        Assert.assertNull(graphInfo.getVertexInfoByIndex(-1));
+        Assert.assertNull(graphInfo.getVertexInfoByIndex(1));
         IllegalArgumentException illegalArgumentException =
                 Assert.assertThrows(
                         IllegalArgumentException.class, () -> graphInfo.getVertexInfo("not_exist"));
@@ -106,6 +109,9 @@ public class GraphInfoTest {
                 "Vertex type not_exist not exist in graph ldbc_sample",
                 illegalArgumentException.getMessage());
         Assert.assertEquals(knowsEdgeInfo, graphInfo.getEdgeInfo("person", "knows", "person"));
+        Assert.assertEquals(knowsEdgeInfo, graphInfo.getEdgeInfoByIndex(0));
+        Assert.assertNull(graphInfo.getEdgeInfoByIndex(-1));
+        Assert.assertNull(graphInfo.getEdgeInfoByIndex(1));
         illegalArgumentException =
                 Assert.assertThrows(
                         IllegalArgumentException.class,

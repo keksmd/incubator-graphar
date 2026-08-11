@@ -283,6 +283,20 @@ public class GraphInfo {
         return edgeConcat2EdgeInfo.get(EdgeInfo.concat(srcType, edgeType, dstType));
     }
 
+    public VertexInfo getVertexInfoByIndex(int index) {
+        if (index < 0 || index >= vertexInfos.size()) {
+            return null;
+        }
+        return vertexInfos.get(index);
+    }
+
+    public EdgeInfo getEdgeInfoByIndex(int index) {
+        if (index < 0 || index >= edgeInfos.size()) {
+            return null;
+        }
+        return edgeInfos.get(index);
+    }
+
     public int getVertexInfoNum() {
         return vertexInfos.size();
     }
