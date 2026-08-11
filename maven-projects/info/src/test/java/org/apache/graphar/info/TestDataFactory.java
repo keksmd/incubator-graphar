@@ -55,11 +55,12 @@ public class TestDataFactory {
         Property firstName = createProperty("firstName", DataType.STRING, false, false);
         Property lastName = createProperty("lastName", DataType.STRING, false, false);
         Property gender = createProperty("gender", DataType.STRING, false, true);
+        Property emails = createProperty("emails", DataType.listOf(DataType.STRING), false, true);
 
         PropertyGroup idGroup = createPropertyGroup(List.of(id), FileType.PARQUET, "id/");
         PropertyGroup nameGroup =
                 createPropertyGroup(
-                        List.of(firstName, lastName, gender),
+                        List.of(firstName, lastName, gender, emails),
                         FileType.ORC,
                         "firstName_lastName_gender/");
 
