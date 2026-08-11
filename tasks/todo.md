@@ -20,6 +20,8 @@ The published devcontainer image `ghcr.io/apache/graphar-dev:latest` is cached l
 
 # Pure-Java SDK bootstrap
 
+- [x] Repair Apache PR #946 branch hygiene: retain only the focused edge-layout implementation and tests; keep internal task/process records in the product fork.
+
 - [x] Phase 0: publish the architecture, compatibility contract, format invariants, and delivery roadmap.
 - [x] Phase 1a: restore C++-compatible edge path resolution in `graphar-info` and replace self-referential URI tests with fixture parity checks.
 - [ ] Phase 1b: close [#944](https://github.com/apache/incubator-graphar/issues/944) with cross-language metadata fixtures and remaining verified `graphar-info` gaps; it depends on edge-layout gate [#943](https://github.com/apache/incubator-graphar/issues/943).
