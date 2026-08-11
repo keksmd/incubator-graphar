@@ -1,0 +1,12 @@
+chunk_size: 100
+prefix: vertex/person/
+property_groups:
+  - file_type: parquet
+    prefix: invalid/
+    properties:
+      - data_type: list<bool>
+        is_nullable: true
+        is_primary: false
+        name: invalid
+type: person
+version: gar/v1

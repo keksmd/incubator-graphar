@@ -1,0 +1,31 @@
+chunk_size: 100
+prefix: vertex/person/
+property_groups:
+  - file_type: parquet
+    prefix: id/
+    properties:
+      - data_type: int64
+        is_nullable: false
+        is_primary: true
+        name: id
+  - file_type: orc
+    prefix: firstName_lastName_gender/
+    properties:
+      - data_type: string
+        is_nullable: false
+        is_primary: false
+        name: firstName
+      - data_type: string
+        is_nullable: false
+        is_primary: false
+        name: lastName
+      - data_type: string
+        is_nullable: true
+        is_primary: false
+        name: gender
+      - data_type: list<string>
+        is_nullable: true
+        is_primary: false
+        name: emails
+type: person
+version: gar/v1
