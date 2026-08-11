@@ -1,24 +1,36 @@
 # Delivery protocol
 
-## Issue-first GitHub workflow
+## Two delivery tracks
 
-For every code change, create or identify a focused upstream issue before
-opening, updating, or requesting review on a pull request.
+### Product fork (`origin`)
 
-1. Read the relevant specification, research findings, and existing upstream
-   discussion before creating an issue.
-2. The issue must state scope, non-goals, acceptance criteria, format/API
-   compatibility requirements, and test evidence required for closure.
-3. Cross-link the issue, implementation branch, commits, pull request, and
-   design-discussion comments. Use `Fixes #<issue>` only when the whole issue
-   is actually completed by that pull request; otherwise use `Relates to`.
-4. Do not open a code PR until its issue exists. Keep work on the branch while
-   issue-first planning or investigation is incomplete.
-5. Before completion, inspect every PR check; fix failures from their primary
-   logs and confirm the final required checks are green.
-6. PR titles must use the repository's conventional-commit release type, for
-   example `fix:`, `feat:`, `docs:`, `test:`, or `refactor:`; a bracketed
-   component prefix alone fails the mandatory title check.
+The fork is the primary product track and advances without waiting for Apache
+review, issue triage, or upstream CI approval. Implement the complete
+production vertical there as soon as its design and local verification are
+ready. Keep commits small and layered as `upstreamable` or `product-only` so
+the reusable core can later be extracted without a mega-squash.
+
+### Apache upstream (`apache/incubator-graphar`)
+
+Only an external upstream contribution is issue-first: create or identify the
+focused issue before opening, updating, or requesting review on its PR.
+
+1. Read the specification, research findings, existing discussions, and the
+   applicable GitHub template before creating an issue.
+2. Use the upstream issue template's required description and component
+   fields; apply the appropriate type and `Component:*` labels.
+3. State scope, non-goals, acceptance criteria, compatibility requirements,
+   dependency links, and closure evidence. Start with umbrella issues; create
+   component subissues only when their fork slice is ready for upstreaming.
+4. Cross-link the issue, implementation branch, commits, PR, and design
+   discussion. Use `Fixes #<issue>` only when the whole issue is completed;
+   otherwise use `Relates to`.
+5. Use the upstream pull-request template verbatim, complete its checklist,
+   and use a Conventional Commit PR title such as `fix(java): ...`.
+6. Before reporting an upstream PR as ready, inspect every check and its
+   primary log. Resolve code failures; record fork-PR approval requirements
+   separately from executed CI and never represent local verification as a
+   green upstream workflow.
 
 ## Pure-Java SDK execution
 

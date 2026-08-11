@@ -8,10 +8,11 @@ sidebar_position: 6
 
 ## Delivery model
 
-The product fork moves independently of upstream review. Commits remain small,
-tested, and layered so reusable parts can be proposed upstream. With explicit
-authorization, upstream delivery is issue-first: an issue states the scope,
-acceptance evidence, and dependencies before any corresponding code PR opens.
+The product fork moves independently of upstream review and is the production
+track: it may implement a complete vertical before Apache has reviewed any
+piece. Commits remain small and layered as upstreamable or product-only so
+reusable work can be extracted later. The separate Apache contribution track
+is issue-first and uses its issue/PR templates, labels, review, and CI rules.
 
 ## Milestones
 
@@ -54,14 +55,9 @@ GraphAr v1 metadata + local storage + Parquet + ordered_by_source
 5. Chunk/layout resolution, offsets, adjacency, reader facade.
 6. Writer, validator, remaining layouts, and adapters.
 
-Upstream tracking is issue-first: [#756](https://github.com/apache/incubator-graphar/issues/756)
-records the architecture discussion, [#943](https://github.com/apache/incubator-graphar/issues/943)
-tracks the edge-layout compatibility gate, and
-[#944](https://github.com/apache/incubator-graphar/issues/944) tracks the
-remaining metadata-parity gate. Subsequent delivery gates are storage
-[#947](https://github.com/apache/incubator-graphar/issues/947), IO contract
-[#948](https://github.com/apache/incubator-graphar/issues/948), Parquet
-[#949](https://github.com/apache/incubator-graphar/issues/949), ordered-source
-reader [#950](https://github.com/apache/incubator-graphar/issues/950), and
-writer/validator [#951](https://github.com/apache/incubator-graphar/issues/951).
-A code PR links its issue and its completed acceptance evidence.
+Upstream begins with the architecture umbrella [#756](https://github.com/apache/incubator-graphar/issues/756), the
+compatibility/TCK umbrella [#944](https://github.com/apache/incubator-graphar/issues/944), and the
+reader/writer umbrella [#947](https://github.com/apache/incubator-graphar/issues/947). The focused
+edge-layout gate is [#943](https://github.com/apache/incubator-graphar/issues/943). Create storage,
+IO, Parquet, reader, and writer subissues only when their independently verified fork slice is ready
+to be proposed upstream. An upstream PR links its issue and completed acceptance evidence.
