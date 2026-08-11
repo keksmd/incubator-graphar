@@ -82,5 +82,6 @@ dependency-reduced-pom.xml
 
 # Vibe coding
 CLAUDE.md
+tasks/
 deep-research-report.md
 plan.md
