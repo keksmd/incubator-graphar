@@ -9,9 +9,9 @@ sidebar_position: 6
 ## Delivery model
 
 The product fork moves independently of upstream review. Commits remain small,
-tested, and layered so reusable parts can be proposed upstream. Repository work
-does not post external issues, discussions, or pull requests without explicit
-authorization.
+tested, and layered so reusable parts can be proposed upstream. With explicit
+authorization, upstream delivery is issue-first: an issue states the scope,
+acceptance evidence, and dependencies before any corresponding code PR opens.
 
 ## Milestones
 
@@ -58,5 +58,10 @@ Upstream tracking is issue-first: [#756](https://github.com/apache/incubator-gra
 records the architecture discussion, [#943](https://github.com/apache/incubator-graphar/issues/943)
 tracks the edge-layout compatibility gate, and
 [#944](https://github.com/apache/incubator-graphar/issues/944) tracks the
-remaining metadata-parity gate. A code PR links its issue and its completed
-acceptance evidence.
+remaining metadata-parity gate. Subsequent delivery gates are storage
+[#947](https://github.com/apache/incubator-graphar/issues/947), IO contract
+[#948](https://github.com/apache/incubator-graphar/issues/948), Parquet
+[#949](https://github.com/apache/incubator-graphar/issues/949), ordered-source
+reader [#950](https://github.com/apache/incubator-graphar/issues/950), and
+writer/validator [#951](https://github.com/apache/incubator-graphar/issues/951).
+A code PR links its issue and its completed acceptance evidence.
