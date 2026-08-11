@@ -108,6 +108,14 @@ repos:
         pass_filenames: false
         require_serial: true
 
+      - id: spotless-java-storage
+        name: Spotless java storage
+        entry: bash -c 'cd maven-projects && mvn -pl storage-api,storage-local spotless:apply'
+        language: system
+        files: ^maven-projects/storage-(api|local)/
+        pass_filenames: false
+        require_serial: true
+
       - id: cargo-fmt
         name: Rust cargo fmt
         entry: bash -c 'cd rust && cargo fmt --all'

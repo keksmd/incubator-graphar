@@ -19,3 +19,9 @@
 - Promote only mature, standalone fork slices upstream at a measured cadence. Cut each upstream candidate from current `upstream/main` with the minimal needed commits; do not create an upstream PR for every fork commit or build a dependent PR chain.
 - Never include `tasks/`, internal process records, or fork-only links in an Apache PR.
 - Before every upstream commit or force-push, run `pre-commit run --files` on the exact changed paths. If a formatter edits files, rerun it until it passes; mark the PR checklist only with the hook result actually obtained.
+
+## IO contract boundary
+
+- Keep storage limited to URI-backed files and seekable byte streams. Do not put GraphAr layout, Parquet, Hadoop, Arrow, projection, filtering, or query semantics into storage.
+- The later `io-api` request must carry URI, projection, optional row range, optional predicate, and limit. A physical backend reports which hints it applied; declining a pushdown must not change results.
+- Do not require Arrow as the public batch representation and do not add a general query AST before the reader vertical proves a need for it.
