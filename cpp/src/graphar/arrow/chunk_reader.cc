@@ -75,7 +75,9 @@ Status GeneralCast(const std::shared_ptr<arrow::Array>& in,
                    std::shared_ptr<arrow::Array>* out) {
   static bool initialized = false;
   if (!initialized) {
+#if ARROW_VERSION >= 21000000
     RETURN_NOT_ARROW_OK(arrow::compute::Initialize());
+#endif
     initialized = true;
   }
   GAR_RETURN_ON_ARROW_ERROR_AND_ASSIGN(*out,
@@ -117,7 +119,9 @@ Status CastTableWithSchema(const std::shared_ptr<arrow::Table>& table,
                            std::shared_ptr<arrow::Table>* out_table) {
   static bool initialized = false;
   if (!initialized) {
+#if ARROW_VERSION >= 21000000
     RETURN_NOT_ARROW_OK(arrow::compute::Initialize());
+#endif
     initialized = true;
   }
   if (table->schema()->Equals(*schema)) {

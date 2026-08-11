@@ -25,7 +25,9 @@ namespace graphar {
 Status EnsureComputeInitialized() {
   static bool initialized = false;
   if (!initialized) {
+#if ARROW_VERSION >= 21000000
     RETURN_NOT_ARROW_OK(arrow::compute::Initialize());
+#endif
     initialized = true;
   }
   return Status::OK();

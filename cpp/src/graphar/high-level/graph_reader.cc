@@ -948,7 +948,9 @@ Result<std::shared_ptr<EdgesCollection>> EdgesCollection::Make(
     const IdType vertex_chunk_end) noexcept {
   static bool initialized = false;
   if (!initialized) {
+#if ARROW_VERSION >= 21000000
     RETURN_NOT_ARROW_OK(arrow::compute::Initialize());
+#endif
     arrow::dataset::internal::Initialize();
     initialized = true;
   }

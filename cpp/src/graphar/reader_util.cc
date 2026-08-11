@@ -47,7 +47,9 @@ Status CheckFilterOptions(
     const std::shared_ptr<PropertyGroup>& property_group) noexcept {
   static bool initialized = false;
   if (!initialized) {
+#if ARROW_VERSION >= 21000000
     RETURN_NOT_ARROW_OK(arrow::compute::Initialize());
+#endif
     initialized = true;
   }
   if (filter_options.filter) {
