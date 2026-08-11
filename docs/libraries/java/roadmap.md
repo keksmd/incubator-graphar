@@ -54,6 +54,9 @@ GraphAr v1 metadata + local storage + Parquet + ordered_by_source
 5. Chunk/layout resolution, offsets, adjacency, reader facade.
 6. Writer, validator, remaining layouts, and adapters.
 
-The design proposal for the existing Java architecture discussion is prepared
-but not sent automatically. It asks maintainers to confirm module boundaries,
-IO separation, Parquet as the first backend, and deferred query AST.
+Upstream tracking is issue-first: [#756](https://github.com/apache/incubator-graphar/issues/756)
+records the architecture discussion, [#943](https://github.com/apache/incubator-graphar/issues/943)
+tracks the edge-layout compatibility gate, and
+[#944](https://github.com/apache/incubator-graphar/issues/944) tracks the
+remaining metadata-parity gate. A code PR links its issue and its completed
+acceptance evidence.

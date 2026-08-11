@@ -135,7 +135,7 @@ public class PropertyGroup implements Iterable<Property> {
             propertyNameSet.put(propertyName, true);
 
             // TODO: support list type in csv file
-            if (property.getDataType() == DataType.LIST && fileType == FileType.CSV) {
+            if (property.getDataType().isList() && fileType == FileType.CSV) {
                 return false;
             }
             if (property.getCardinality() != Cardinality.SINGLE && fileType == FileType.CSV) {

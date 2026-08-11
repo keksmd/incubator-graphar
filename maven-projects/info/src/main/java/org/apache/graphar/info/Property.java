@@ -44,14 +44,14 @@ public class Property {
         this.dataType = dataType;
         this.cardinality = cardinality;
         this.primary = primary;
-        this.nullable = nullable;
+        this.nullable = primary ? false : nullable;
     }
 
     public Property(PropertyYaml yamlParser) {
         this.name = yamlParser.getName();
         this.dataType = DataType.fromString(yamlParser.getData_type());
         this.primary = yamlParser.getIs_primary();
-        this.nullable = yamlParser.getIs_nullable();
+        this.nullable = primary ? false : yamlParser.getIs_nullable();
         Cardinality cardinality = Cardinality.SINGLE;
         if (yamlParser.getCardinality() != null && !yamlParser.getCardinality().isEmpty()) {
             cardinality = Cardinality.fromString(yamlParser.getCardinality());
