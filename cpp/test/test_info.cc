@@ -21,9 +21,12 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <vector>
 
 #include "./util.h"
 
+#include "arrow/api.h"
+#include "graphar/api/arrow_reader.h"
 #include "graphar/api/info.h"
 #include "graphar/fwd.h"
 #include "graphar/status.h"
@@ -105,6 +108,118 @@ TEST_CASE_METHOD(GlobalFixture,
     REQUIRE(graph_info->GetEdgeInfo("person", "knows", "person")
                 ->Save((output_path / "person_knows_person.edge.yaml").string())
                 .ok());
+  }
+}
+
+TEST_CASE("Load generated Java Parquet graph through C++ readers",
+          "[java-tck]") {
+  const char* graph_path = std::getenv("GRAPHAR_JAVA_TCK_GRAPH");
+  if (graph_path == nullptr || *graph_path == '\0') {
+    SKIP(
+        "set GRAPHAR_JAVA_TCK_GRAPH to an absolute path of a graph YAML "
+        "written by the pure-Java GraphWriter");
+  }
+
+  auto maybe_graph_info = GraphInfo::Load(graph_path);
+  INFO(graph_path);
+  INFO(maybe_graph_info.status().message());
+  REQUIRE(maybe_graph_info.status().ok());
+  const auto& graph_info = maybe_graph_info.value();
+
+  // The Java compatibility generator must publish a non-empty physical graph,
+  // not just syntactically valid metadata.
+  REQUIRE(graph_info->VertexInfoNum() > 0);
+  REQUIRE(graph_info->EdgeInfoNum() > 0);
+
+  for (const auto& vertex_info : graph_info->GetVertexInfos()) {
+    REQUIRE(vertex_info->PropertyGroupNum() > 0);
+    for (const auto& property_group : vertex_info->GetPropertyGroups()) {
+      auto maybe_reader = VertexPropertyArrowChunkReader::Make(
+          graph_info, vertex_info->GetType(), property_group);
+      INFO(vertex_info->GetType());
+      INFO(property_group->GetPrefix());
+      INFO(maybe_reader.status().message());
+      REQUIRE(maybe_reader.status().ok());
+
+      auto maybe_table = maybe_reader.value()->GetChunk(GetChunkVersion::V2);
+      INFO(maybe_table.status().message());
+      REQUIRE(maybe_table.status().ok());
+      const auto& table = maybe_table.value();
+      REQUIRE(table != nullptr);
+      REQUIRE(table->num_rows() > 0);
+      REQUIRE(table->num_columns() ==
+              static_cast<int>(property_group->GetProperties().size()) + 1);
+      REQUIRE(table->GetColumnByName(GeneralParams::kVertexIndexCol) !=
+              nullptr);
+      for (const auto& property : property_group->GetProperties()) {
+        REQUIRE(table->GetColumnByName(property.name) != nullptr);
+      }
+    }
+  }
+
+  const std::vector<AdjListType> layouts = {
+      AdjListType::unordered_by_source, AdjListType::unordered_by_dest,
+      AdjListType::ordered_by_source, AdjListType::ordered_by_dest};
+  for (const auto& edge_info : graph_info->GetEdgeInfos()) {
+    REQUIRE(edge_info->PropertyGroupNum() > 0);
+    for (const auto layout : layouts) {
+      INFO(edge_info->GetSrcType());
+      INFO(edge_info->GetEdgeType());
+      INFO(edge_info->GetDstType());
+      INFO(AdjListTypeToString(layout));
+      REQUIRE(edge_info->HasAdjacentListType(layout));
+
+      auto maybe_topology_reader = AdjListArrowChunkReader::Make(
+          graph_info, edge_info->GetSrcType(), edge_info->GetEdgeType(),
+          edge_info->GetDstType(), layout);
+      INFO(maybe_topology_reader.status().message());
+      REQUIRE(maybe_topology_reader.status().ok());
+      auto maybe_topology_table = maybe_topology_reader.value()->GetChunk();
+      INFO(maybe_topology_table.status().message());
+      REQUIRE(maybe_topology_table.status().ok());
+      const auto& topology_table = maybe_topology_table.value();
+      REQUIRE(topology_table != nullptr);
+      REQUIRE(topology_table->num_rows() > 0);
+      REQUIRE(topology_table->num_columns() == 2);
+      REQUIRE(topology_table->GetColumnByName(GeneralParams::kSrcIndexCol) !=
+              nullptr);
+      REQUIRE(topology_table->GetColumnByName(GeneralParams::kDstIndexCol) !=
+              nullptr);
+
+      for (const auto& property_group : edge_info->GetPropertyGroups()) {
+        auto maybe_property_reader = AdjListPropertyArrowChunkReader::Make(
+            graph_info, edge_info->GetSrcType(), edge_info->GetEdgeType(),
+            edge_info->GetDstType(), property_group, layout);
+        INFO(property_group->GetPrefix());
+        INFO(maybe_property_reader.status().message());
+        REQUIRE(maybe_property_reader.status().ok());
+        auto maybe_property_table = maybe_property_reader.value()->GetChunk();
+        INFO(maybe_property_table.status().message());
+        REQUIRE(maybe_property_table.status().ok());
+        const auto& property_table = maybe_property_table.value();
+        REQUIRE(property_table != nullptr);
+        REQUIRE(property_table->num_rows() == topology_table->num_rows());
+        REQUIRE(property_table->num_columns() ==
+                static_cast<int>(property_group->GetProperties().size()));
+        for (const auto& property : property_group->GetProperties()) {
+          REQUIRE(property_table->GetColumnByName(property.name) != nullptr);
+        }
+      }
+
+      if (layout == AdjListType::ordered_by_source ||
+          layout == AdjListType::ordered_by_dest) {
+        auto maybe_offset_reader = AdjListOffsetArrowChunkReader::Make(
+            graph_info, edge_info->GetSrcType(), edge_info->GetEdgeType(),
+            edge_info->GetDstType(), layout);
+        INFO(maybe_offset_reader.status().message());
+        REQUIRE(maybe_offset_reader.status().ok());
+        auto maybe_offset_array = maybe_offset_reader.value()->GetChunk();
+        INFO(maybe_offset_array.status().message());
+        REQUIRE(maybe_offset_array.status().ok());
+        REQUIRE(maybe_offset_array.value() != nullptr);
+        REQUIRE(maybe_offset_array.value()->length() > 1);
+      }
+    }
   }
 }
 

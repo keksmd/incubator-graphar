@@ -132,7 +132,16 @@ public class GraphWriterFullGraphTest {
                         new ParquetPhysicalReader(storage),
                         root.resolve(
                                 definition.vertex.getPropertyGroupChunkUri(
-                                        definition.vertexProperties, 0))));
+                                        definition.vertexProperties, 0)),
+                        1));
+        assertEquals(
+                0L,
+                firstValue(
+                        new ParquetPhysicalReader(storage),
+                        root.resolve(
+                                definition.vertex.getPropertyGroupChunkUri(
+                                        definition.vertexProperties, 0)),
+                        0));
     }
 
     @Test
@@ -310,11 +319,12 @@ public class GraphWriterFullGraphTest {
         return values;
     }
 
-    private static Object firstValue(ParquetPhysicalReader reader, URI uri) throws Exception {
+    private static Object firstValue(ParquetPhysicalReader reader, URI uri, int column)
+            throws Exception {
         try (BatchCursor cursor =
                 reader.read(org.apache.graphar.io.ReadRequest.builder(uri).build()).cursor()) {
             assertTrue(cursor.next());
-            return cursor.batch().row(0).value(0);
+            return cursor.batch().row(0).value(column);
         }
     }
 

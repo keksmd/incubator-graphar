@@ -86,6 +86,7 @@
         <module>core</module>
         <module>reader</module>
         <module>writer</module>
+        <module>validator</module>
         <module>integration-iceberg</module>
         <module>integration-ignite</module>
         <module>integration-iceberg-ignite</module>

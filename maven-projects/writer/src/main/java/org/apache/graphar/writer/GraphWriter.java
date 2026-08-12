@@ -70,6 +70,8 @@ import org.apache.graphar.storage.Storage;
 /** Writes GraphAr Parquet vertex property groups and all declared adjacency layouts. */
 public final class GraphWriter {
     private static final int MAX_MERGE_INPUTS = 32;
+    private static final Field VERTEX_INDEX_FIELD =
+            new Field("_graphArVertexIndex", ColumnType.of(ColumnType.Kind.INT64), false);
     private static final Schema OFFSET_SCHEMA =
             new Schema(
                     List.of(
@@ -135,7 +137,8 @@ public final class GraphWriter {
         Objects.requireNonNull(propertyGroup, "Property group cannot be null.");
         Objects.requireNonNull(source, "Vertex source cannot be null.");
         requireVertexGroup(vertexInfo, propertyGroup);
-        Schema schema = schema(propertyGroup);
+        Schema sourceSchema = schema(propertyGroup);
+        Schema outputSchema = vertexSchema(propertyGroup);
         long count = 0;
         long chunk = 0;
         List<Row> rows = new ArrayList<>();
@@ -143,16 +146,16 @@ public final class GraphWriter {
             while (source.next()) {
                 RecordBatch batch =
                         Objects.requireNonNull(source.batch(), "batch cursor returned null");
-                requireSchema(schema, batch.schema());
+                requireSchema(sourceSchema, batch.schema());
                 for (int index = 0; index < batch.rowCount(); index++) {
                     Row row = batch.row(index);
                     validatePropertyCardinality(propertyGroup, row);
-                    rows.add(copyRow(row, schema));
+                    rows.add(vertexRow(count, row, sourceSchema));
                     count = Math.addExact(count, 1);
                     if (rows.size() == vertexInfo.getChunkSize()) {
                         writeRows(
                                 vertexInfo.getPropertyGroupChunkUri(propertyGroup, chunk++),
-                                schema,
+                                outputSchema,
                                 rows);
                         rows = new ArrayList<>();
                     }
@@ -162,7 +165,8 @@ public final class GraphWriter {
             source.close();
         }
         if (!rows.isEmpty()) {
-            writeRows(vertexInfo.getPropertyGroupChunkUri(propertyGroup, chunk), schema, rows);
+            writeRows(
+                    vertexInfo.getPropertyGroupChunkUri(propertyGroup, chunk), outputSchema, rows);
         }
         writeLong(vertexInfo.getVerticesNumFileUri(), count);
         return count;
@@ -651,6 +655,13 @@ public final class GraphWriter {
         return new Schema(fields);
     }
 
+    private static Schema vertexSchema(PropertyGroup propertyGroup) {
+        List<Field> fields = new ArrayList<>();
+        fields.add(VERTEX_INDEX_FIELD);
+        fields.addAll(schema(propertyGroup).fields());
+        return new Schema(fields);
+    }
+
     private static ColumnType type(DataType dataType) {
         if (dataType.isList()) return ColumnType.listOf(type(dataType.getValueType()));
         if (dataType.equals(DataType.BOOL)) return ColumnType.of(ColumnType.Kind.BOOLEAN);
@@ -828,6 +839,15 @@ public final class GraphWriter {
     private static Row copyRow(Row source, Schema schema) {
         Object[] values = new Object[schema.fields().size()];
         for (int index = 0; index < values.length; index++) values[index] = source.value(index);
+        return new ArrayRow(values);
+    }
+
+    private static Row vertexRow(long vertexId, Row source, Schema sourceSchema) {
+        Object[] values = new Object[sourceSchema.fields().size() + 1];
+        values[0] = vertexId;
+        for (int index = 0; index < sourceSchema.fields().size(); index++) {
+            values[index + 1] = source.value(index);
+        }
         return new ArrayRow(values);
     }
 
