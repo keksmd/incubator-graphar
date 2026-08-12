@@ -19,34 +19,31 @@
     under the License.
 
 -->
-
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
-
     <parent>
         <groupId>org.apache.graphar</groupId>
         <artifactId>graphar-root</artifactId>
         <version>${graphar.version}</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
-
-    <artifactId>graphar-io-parquet</artifactId>
+    <artifactId>graphar-writer</artifactId>
     <packaging>jar</packaging>
     <version>${graphar.version}</version>
-
-    <name>graphar-io-parquet</name>
-
+    <name>graphar-writer</name>
     <properties>
         <maven.compiler.source>11</maven.compiler.source>
         <maven.compiler.target>11</maven.compiler.target>
-        <hadoop.version>3.3.0</hadoop.version>
-        <parquet.version>1.18.0</parquet.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
-
     <dependencies>
+        <dependency>
+            <groupId>org.apache.graphar</groupId>
+            <artifactId>graphar-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.apache.graphar</groupId>
             <artifactId>graphar-io-api</artifactId>
@@ -58,25 +55,21 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
-            <groupId>org.apache.parquet</groupId>
-            <artifactId>parquet-hadoop</artifactId>
-            <version>${parquet.version}</version>
-        </dependency>
-        <!-- parquet-hadoop loads Hadoop configuration and MapReduce input classes at runtime. -->
-        <dependency>
-            <groupId>org.apache.hadoop</groupId>
-            <artifactId>hadoop-common</artifactId>
-            <version>${hadoop.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.hadoop</groupId>
-            <artifactId>hadoop-mapreduce-client-core</artifactId>
-            <version>${hadoop.version}</version>
-        </dependency>
-        <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
             <version>4.13.2</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.graphar</groupId>
+            <artifactId>graphar-reader</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.graphar</groupId>
+            <artifactId>graphar-io-parquet</artifactId>
+            <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -86,7 +79,6 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
-
     <build>
         <plugins>
             <plugin>
@@ -94,25 +86,13 @@
                 <artifactId>spotless-maven-plugin</artifactId>
                 <version>${spotless-maven-plugin.version}</version>
                 <configuration>
-                    <java>
-                        <googleJavaFormat>
-                            <version>1.7</version>
-                            <style>AOSP</style>
-                        </googleJavaFormat>
-                    </java>
+                    <java><googleJavaFormat><version>1.7</version><style>AOSP</style></googleJavaFormat></java>
                 </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-javadoc-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <id>attach-javadocs</id>
-                        <goals>
-                            <goal>jar</goal>
-                        </goals>
-                    </execution>
-                </executions>
+                <executions><execution><id>attach-javadocs</id><goals><goal>jar</goal></goals></execution></executions>
             </plugin>
         </plugins>
     </build>

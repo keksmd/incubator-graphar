@@ -84,6 +84,7 @@
         <module>storage-local</module>
         <module>core</module>
         <module>reader</module>
+        <module>writer</module>
     </modules>
 
     <build>
