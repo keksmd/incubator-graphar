@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -183,32 +184,70 @@ final class ParquetBatchCursor implements BatchCursor {
     }
 
     private static Object value(Group group, int index, ParquetColumn column) {
-        switch (column.field().type().kind()) {
+        if (column.field().type().kind() == org.apache.graphar.io.ColumnType.Kind.LIST) {
+            return listValue(group, index, column);
+        }
+        return scalarValue(group, index, column.field().type().kind());
+    }
+
+    private static List<Object> listValue(Group group, int index, ParquetColumn column) {
+        Group list = group.getGroup(index, 0);
+        if (list.getType().getFieldCount() != 1) {
+            throw new IllegalArgumentException(
+                    "Unsupported Parquet LIST field: " + column.field().name());
+        }
+        int count = list.getFieldRepetitionCount(0);
+        if (count == 0) {
+            return List.of();
+        }
+        List<Object> values = new ArrayList<>(count);
+        org.apache.graphar.io.ColumnType element =
+                column.field().type().elementType().orElseThrow();
+        for (int elementIndex = 0; elementIndex < count; elementIndex++) {
+            Group elementGroup = list.getGroup(0, elementIndex);
+            if (elementGroup.getType().getFieldCount() != 1
+                    || elementGroup.getFieldRepetitionCount(0) != 1) {
+                throw new IllegalArgumentException(
+                        "Unsupported Parquet LIST element: " + column.field().name());
+            }
+            values.add(scalarValue(elementGroup, 0, element, 0));
+        }
+        return Collections.unmodifiableList(values);
+    }
+
+    private static Object scalarValue(
+            Group group, int index, org.apache.graphar.io.ColumnType.Kind kind) {
+        return scalarValue(group, index, org.apache.graphar.io.ColumnType.of(kind), 0);
+    }
+
+    private static Object scalarValue(
+            Group group, int index, org.apache.graphar.io.ColumnType type, int repetitionIndex) {
+        switch (type.kind()) {
             case BOOLEAN:
-                return group.getBoolean(index, 0);
+                return group.getBoolean(index, repetitionIndex);
             case INT8:
-                return (byte) group.getInteger(index, 0);
+                return (byte) group.getInteger(index, repetitionIndex);
             case INT16:
-                return (short) group.getInteger(index, 0);
+                return (short) group.getInteger(index, repetitionIndex);
             case INT32:
-                return group.getInteger(index, 0);
+                return group.getInteger(index, repetitionIndex);
             case INT64:
-                return group.getLong(index, 0);
+                return group.getLong(index, repetitionIndex);
             case FLOAT32:
-                return group.getFloat(index, 0);
+                return group.getFloat(index, repetitionIndex);
             case FLOAT64:
-                return group.getDouble(index, 0);
+                return group.getDouble(index, repetitionIndex);
             case STRING:
-                return group.getBinary(index, 0).toStringUsingUTF8();
+                return group.getBinary(index, repetitionIndex).toStringUsingUTF8();
             case BINARY:
-                return group.getBinary(index, 0).getBytes();
+                return group.getBinary(index, repetitionIndex).getBytes();
             case DATE:
-                return LocalDate.ofEpochDay(group.getInteger(index, 0));
+                return LocalDate.ofEpochDay(group.getInteger(index, repetitionIndex));
             case TIMESTAMP_MILLIS:
-                return Instant.ofEpochMilli(group.getLong(index, 0));
+                return Instant.ofEpochMilli(group.getLong(index, repetitionIndex));
             default:
                 throw new IllegalArgumentException(
-                        "Unsupported Parquet column type: " + column.field().type().kind());
+                        "Unsupported Parquet column type: " + type.kind());
         }
     }
 

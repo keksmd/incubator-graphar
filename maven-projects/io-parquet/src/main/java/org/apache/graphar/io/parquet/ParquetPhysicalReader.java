@@ -45,7 +45,7 @@ import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.PrimitiveType;
 import org.apache.parquet.schema.Type;
 
-/** A storage-backed reader for flat, primitive Parquet files. */
+/** A storage-backed reader for GraphAr primitive and LIST Parquet fields. */
 public final class ParquetPhysicalReader implements PhysicalReader {
     private static final Set<ReadCapability> CAPABILITIES =
             Collections.unmodifiableSet(
@@ -110,12 +110,13 @@ public final class ParquetPhysicalReader implements PhysicalReader {
     private static List<ParquetColumn> columns(MessageType fileSchema) {
         List<ParquetColumn> columns = new ArrayList<>();
         for (Type type : fileSchema.getFields()) {
-            if (!type.isPrimitive() || type.isRepetition(Type.Repetition.REPEATED)) {
+            if (type.isRepetition(Type.Repetition.REPEATED)
+                    || (!type.isPrimitive() && !isList(type))) {
                 throw new IllegalArgumentException(
-                        "Only flat, non-repeated primitive Parquet columns are supported: "
+                        "Only primitive or standard LIST Parquet columns are supported: "
                                 + type.getName());
             }
-            columns.add(new ParquetColumn(type.asPrimitiveType(), toField(type.asPrimitiveType())));
+            columns.add(new ParquetColumn(type, toField(type)));
         }
         return List.copyOf(columns);
     }
@@ -198,11 +199,41 @@ public final class ParquetPhysicalReader implements PhysicalReader {
         return Collections.emptySet();
     }
 
-    private static Field toField(PrimitiveType type) {
+    private static boolean isList(Type type) {
+        return type.getLogicalTypeAnnotation()
+                instanceof LogicalTypeAnnotation.ListLogicalTypeAnnotation;
+    }
+
+    private static Field toField(Type type) {
         return new Field(type.getName(), type(type), !type.isRepetition(Type.Repetition.REQUIRED));
     }
 
-    private static ColumnType type(PrimitiveType type) {
+    private static ColumnType type(Type type) {
+        if (!type.isPrimitive()) {
+            return listType(type);
+        }
+        PrimitiveType primitive = type.asPrimitiveType();
+        return primitiveType(primitive);
+    }
+
+    private static ColumnType listType(Type type) {
+        if (!isList(type) || type.asGroupType().getFieldCount() != 1) {
+            throw new IllegalArgumentException("Unsupported Parquet LIST field: " + type);
+        }
+        Type repeated = type.asGroupType().getType(0);
+        if (!repeated.isRepetition(Type.Repetition.REPEATED)
+                || repeated.isPrimitive()
+                || repeated.asGroupType().getFieldCount() != 1) {
+            throw new IllegalArgumentException("Unsupported Parquet LIST field: " + type);
+        }
+        Type element = repeated.asGroupType().getType(0);
+        if (!element.isPrimitive() || !element.isRepetition(Type.Repetition.REPEATED)) {
+            throw new IllegalArgumentException("Unsupported Parquet LIST field: " + type);
+        }
+        return ColumnType.listOf(primitiveType(element.asPrimitiveType()));
+    }
+
+    private static ColumnType primitiveType(PrimitiveType type) {
         LogicalTypeAnnotation logical = type.getLogicalTypeAnnotation();
         if (logical instanceof LogicalTypeAnnotation.DateLogicalTypeAnnotation) {
             requirePhysical(type, PrimitiveType.PrimitiveTypeName.INT32, "DATE");

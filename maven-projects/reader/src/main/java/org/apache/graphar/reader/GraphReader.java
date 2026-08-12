@@ -24,6 +24,7 @@ import java.net.URI;
 import java.util.Objects;
 import org.apache.graphar.info.GraphInfo;
 import org.apache.graphar.info.loader.GraphInfoLoader;
+import org.apache.graphar.info.type.AdjListType;
 import org.apache.graphar.io.PhysicalReader;
 import org.apache.graphar.storage.Storage;
 
@@ -67,6 +68,17 @@ public final class GraphReader {
     public OrderedSourceEdgeReader edge(String srcType, String edgeType, String dstType) {
         return new OrderedSourceEdgeReader(
                 graphInfo.getEdgeInfo(srcType, edgeType, dstType),
+                datasetRoot,
+                storage,
+                physicalReader);
+    }
+
+    /** Opens any declared GraphAr adjacency layout with topology and edge-property joins. */
+    public EdgeLayoutReader edge(
+            String srcType, String edgeType, String dstType, AdjListType layout) {
+        return new EdgeLayoutReader(
+                graphInfo.getEdgeInfo(srcType, edgeType, dstType),
+                layout,
                 datasetRoot,
                 storage,
                 physicalReader);

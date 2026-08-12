@@ -25,8 +25,11 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import org.apache.graphar.core.ChunkMath;
 import org.apache.graphar.info.EdgeInfo;
 import org.apache.graphar.info.GraphInfo;
@@ -49,7 +52,7 @@ import org.apache.graphar.io.WriteRequest;
 import org.apache.graphar.storage.PositionOutput;
 import org.apache.graphar.storage.Storage;
 
-/** Writes the first pure-Java GraphAr Parquet vertex and ordered-source topology vertical. */
+/** Writes GraphAr Parquet vertex property groups and all declared adjacency layouts. */
 public final class GraphWriter {
     private static final Schema OFFSET_SCHEMA =
             new Schema(
@@ -126,7 +129,9 @@ public final class GraphWriter {
                         Objects.requireNonNull(source.batch(), "batch cursor returned null");
                 requireSchema(schema, batch.schema());
                 for (int index = 0; index < batch.rowCount(); index++) {
-                    rows.add(copyRow(batch.row(index), schema));
+                    Row row = batch.row(index);
+                    validatePropertyCardinality(propertyGroup, row);
+                    rows.add(copyRow(row, schema));
                     count = Math.addExact(count, 1);
                     if (rows.size() == vertexInfo.getChunkSize()) {
                         writeRows(
@@ -221,6 +226,113 @@ public final class GraphWriter {
     }
 
     /**
+     * Writes topology and every declared edge property group in exactly the same physical row
+     * order. Ordered layouts receive CSR/CSC offsets; unordered layouts are aligned COO partitions
+     * and intentionally have no offset files.
+     */
+    public long writeEdgeLayout(
+            EdgeInfo edgeInfo,
+            AdjListType layout,
+            long alignedVertexCount,
+            List<EdgeRecord> records)
+            throws IOException {
+        Objects.requireNonNull(edgeInfo, "Edge info cannot be null.");
+        Objects.requireNonNull(layout, "Adjacency layout cannot be null.");
+        Objects.requireNonNull(records, "Edge records cannot be null.");
+        if (!edgeInfo.hasAdjListType(layout)) {
+            throw new IllegalArgumentException(
+                    "Edge info does not declare adjacency layout: " + layout);
+        }
+        if (alignedVertexCount < 0) {
+            throw new IllegalArgumentException("Aligned vertex count must be non-negative.");
+        }
+        requireParquet(edgeInfo.getAdjacentList(layout).getFileType(), "adjacency");
+        List<EdgeRecord> ordered = new ArrayList<>(records);
+        validateRecords(edgeInfo, layout, alignedVertexCount, ordered);
+        long vertexChunkSize =
+                layout.getAlignedBy().equals("src")
+                        ? edgeInfo.getSrcChunkSize()
+                        : edgeInfo.getDstChunkSize();
+        if (layout.isOrdered()) {
+            ordered.sort(Comparator.comparingLong(record -> aligned(record, layout)));
+        } else {
+            ordered.sort(
+                    Comparator.comparingLong(record -> aligned(record, layout) / vertexChunkSize));
+        }
+        long partitionCount = ChunkMath.chunkCount(alignedVertexCount, vertexChunkSize);
+        int next = 0;
+        long total = 0;
+        List<PropertyGroup> propertyGroups = edgePropertyGroups(edgeInfo);
+        for (long partition = 0; partition < partitionCount; partition++) {
+            long partitionStart = Math.multiplyExact(partition, vertexChunkSize);
+            long verticesInPartition =
+                    Math.min(vertexChunkSize, alignedVertexCount - partitionStart);
+            List<Row> offsets = layout.isOrdered() ? new ArrayList<>() : null;
+            if (offsets != null) offsets.add(new ArrayRow(new Object[] {0L}));
+            List<EdgeRecord> partitionRows = new ArrayList<>();
+            long partitionEdges = 0;
+            if (layout.isOrdered()) {
+                for (long local = 0; local < verticesInPartition; local++) {
+                    long alignedVertex = partitionStart + local;
+                    while (next < ordered.size()
+                            && aligned(ordered.get(next), layout) == alignedVertex) {
+                        partitionRows.add(ordered.get(next++));
+                        partitionEdges++;
+                        total++;
+                        if (partitionRows.size() == edgeInfo.getChunkSize()) {
+                            writeEdgeChunk(
+                                    edgeInfo,
+                                    layout,
+                                    partition,
+                                    partitionEdges / edgeInfo.getChunkSize() - 1,
+                                    partitionRows,
+                                    propertyGroups);
+                            partitionRows = new ArrayList<>();
+                        }
+                    }
+                    offsets.add(new ArrayRow(new Object[] {partitionEdges}));
+                }
+            } else {
+                long partitionEnd = partitionStart + verticesInPartition;
+                while (next < ordered.size() && aligned(ordered.get(next), layout) < partitionEnd) {
+                    partitionRows.add(ordered.get(next++));
+                    partitionEdges++;
+                    total++;
+                    if (partitionRows.size() == edgeInfo.getChunkSize()) {
+                        writeEdgeChunk(
+                                edgeInfo,
+                                layout,
+                                partition,
+                                partitionEdges / edgeInfo.getChunkSize() - 1,
+                                partitionRows,
+                                propertyGroups);
+                        partitionRows = new ArrayList<>();
+                    }
+                }
+            }
+            if (!partitionRows.isEmpty()) {
+                writeEdgeChunk(
+                        edgeInfo,
+                        layout,
+                        partition,
+                        partitionEdges / edgeInfo.getChunkSize(),
+                        partitionRows,
+                        propertyGroups);
+            }
+            if (offsets != null) {
+                writeRows(edgeInfo.getOffsetChunkUri(layout, partition), OFFSET_SCHEMA, offsets);
+            }
+            writeLong(edgeInfo.getEdgesNumFileUri(layout, partition), partitionEdges);
+        }
+        if (next != ordered.size()) {
+            throw new IllegalStateException(
+                    "Validated edge records were not assigned to a partition.");
+        }
+        writeLong(edgeInfo.getVerticesNumFileUri(layout), alignedVertexCount);
+        return total;
+    }
+
+    /**
      * Writes referenced vertex and edge YAML files first, then the graph YAML last as the
      * graph-root publication marker. Graph metadata remains an explicit caller-owned input.
      */
@@ -280,28 +392,25 @@ public final class GraphWriter {
 
     private static void requireParquet(FileType fileType, String kind) {
         if (fileType != FileType.PARQUET) {
-            throw new IllegalArgumentException("Writer MVP supports Parquet " + kind + " only.");
+            throw new IllegalArgumentException("Graph writer supports Parquet " + kind + " only.");
         }
     }
 
     private static Schema schema(PropertyGroup propertyGroup) {
         List<Field> fields = new ArrayList<>();
         for (Property property : propertyGroup) {
+            ColumnType type = type(property.getDataType());
             if (property.getCardinality() != Cardinality.SINGLE
-                    || property.getDataType().isList()) {
-                throw new IllegalArgumentException(
-                        "Writer MVP supports single-value properties only.");
+                    && type.kind() != ColumnType.Kind.LIST) {
+                type = ColumnType.listOf(type);
             }
-            fields.add(
-                    new Field(
-                            property.getName(),
-                            type(property.getDataType()),
-                            property.isNullable()));
+            fields.add(new Field(property.getName(), type, property.isNullable()));
         }
         return new Schema(fields);
     }
 
     private static ColumnType type(DataType dataType) {
+        if (dataType.isList()) return ColumnType.listOf(type(dataType.getValueType()));
         if (dataType.equals(DataType.BOOL)) return ColumnType.of(ColumnType.Kind.BOOLEAN);
         if (dataType.equals(DataType.INT32)) return ColumnType.of(ColumnType.Kind.INT32);
         if (dataType.equals(DataType.INT64)) return ColumnType.of(ColumnType.Kind.INT64);
@@ -312,6 +421,106 @@ public final class GraphWriter {
         if (dataType.equals(DataType.TIMESTAMP))
             return ColumnType.of(ColumnType.Kind.TIMESTAMP_MILLIS);
         throw new IllegalArgumentException("Unsupported GraphAr property type: " + dataType);
+    }
+
+    private static long aligned(EdgeRecord record, AdjListType layout) {
+        return layout.getAlignedBy().equals("src") ? record.source() : record.destination();
+    }
+
+    private static List<PropertyGroup> edgePropertyGroups(EdgeInfo edgeInfo) {
+        List<PropertyGroup> groups = new ArrayList<>();
+        for (int index = 0; index < edgeInfo.getPropertyGroupNum(); index++) {
+            PropertyGroup group = edgeInfo.getPropertyGroupByIndex(index);
+            requireParquet(group.getFileType(), "edge property group");
+            groups.add(group);
+        }
+        return List.copyOf(groups);
+    }
+
+    private void writeEdgeChunk(
+            EdgeInfo edgeInfo,
+            AdjListType layout,
+            long partition,
+            long edgeChunk,
+            List<EdgeRecord> records,
+            List<PropertyGroup> propertyGroups)
+            throws IOException {
+        List<Row> topology = new ArrayList<>(records.size());
+        for (EdgeRecord record : records) {
+            topology.add(new ArrayRow(new Object[] {record.source(), record.destination()}));
+        }
+        writeRows(
+                edgeInfo.getAdjacentListChunkUri(layout, partition, edgeChunk),
+                TOPOLOGY_SCHEMA,
+                topology);
+        for (PropertyGroup propertyGroup : propertyGroups) {
+            Schema schema = schema(propertyGroup);
+            List<Row> properties = new ArrayList<>(records.size());
+            for (EdgeRecord record : records) {
+                Object[] values = new Object[propertyGroup.size()];
+                int index = 0;
+                for (Property property : propertyGroup) {
+                    values[index++] = record.properties().get(property.getName());
+                }
+                properties.add(new ArrayRow(values));
+            }
+            writeRows(
+                    edgeInfo.getPropertyGroupChunkUri(propertyGroup, layout, partition, edgeChunk),
+                    schema,
+                    properties);
+        }
+    }
+
+    private static void validateRecords(
+            EdgeInfo edgeInfo,
+            AdjListType layout,
+            long alignedVertexCount,
+            List<EdgeRecord> records) {
+        Set<String> expectedProperties = new HashSet<>();
+        for (int index = 0; index < edgeInfo.getPropertyGroupNum(); index++) {
+            for (Property property : edgeInfo.getPropertyGroupByIndex(index)) {
+                expectedProperties.add(property.getName());
+            }
+        }
+        for (EdgeRecord record : records) {
+            if (record == null || record.source() < 0 || record.destination() < 0) {
+                throw new IllegalArgumentException("Topology IDs must be non-negative.");
+            }
+            if (aligned(record, layout) >= alignedVertexCount) {
+                throw new IllegalArgumentException(
+                        "Aligned edge endpoint exceeds declared vertex count.");
+            }
+            if (!record.properties().keySet().equals(expectedProperties)) {
+                throw new IllegalArgumentException(
+                        "Edge record properties do not match EdgeInfo property groups.");
+            }
+        }
+    }
+
+    private static void validatePropertyCardinality(PropertyGroup propertyGroup, Row row) {
+        int index = 0;
+        for (Property property : propertyGroup) {
+            Object value = row.value(index++);
+            if (value == null) {
+                continue;
+            }
+            if (property.getCardinality() != Cardinality.SINGLE
+                    || property.getDataType().isList()) {
+                if (!(value instanceof List<?>)) {
+                    throw new IllegalArgumentException(
+                            "GraphAr list property must be represented by a List: "
+                                    + property.getName());
+                }
+                if (property.getCardinality() == Cardinality.SET) {
+                    List<?> values = (List<?>) value;
+                    if (new HashSet<>(values).size() != values.size()) {
+                        throw new IllegalArgumentException(
+                                "GraphAr set property contains duplicate values: "
+                                        + property.getName());
+                    }
+                }
+            }
+        }
     }
 
     private static void validateEdges(long sourceVertexCount, List<TopologyEdge> edges) {

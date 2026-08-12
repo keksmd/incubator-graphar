@@ -20,19 +20,19 @@
 package org.apache.graphar.io.parquet;
 
 import org.apache.graphar.io.Field;
-import org.apache.parquet.schema.PrimitiveType;
+import org.apache.parquet.schema.Type;
 
-/** One supported Parquet primitive and its neutral field contract. */
+/** One supported Parquet field and its neutral field contract. */
 final class ParquetColumn {
-    private final PrimitiveType parquetType;
+    private final Type parquetType;
     private final Field field;
 
-    ParquetColumn(PrimitiveType parquetType, Field field) {
+    ParquetColumn(Type parquetType, Field field) {
         this.parquetType = parquetType;
         this.field = field;
     }
 
-    PrimitiveType parquetType() {
+    Type parquetType() {
         return parquetType;
     }
 

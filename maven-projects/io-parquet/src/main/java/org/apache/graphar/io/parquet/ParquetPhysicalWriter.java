@@ -91,6 +91,10 @@ public final class ParquetPhysicalWriter implements PhysicalWriter {
     private static MessageType parquetSchema(Schema schema) {
         Types.MessageTypeBuilder builder = Types.buildMessage();
         for (Field field : schema.fields()) {
+            if (field.type().kind() == ColumnType.Kind.LIST) {
+                builder.addField(listType(field));
+                continue;
+            }
             Types.PrimitiveBuilder<Types.GroupBuilder<MessageType>> primitive =
                     builder.primitive(physicalType(field.type()), repetition(field));
             LogicalTypeAnnotation logicalType = logicalType(field.type());
@@ -100,6 +104,22 @@ public final class ParquetPhysicalWriter implements PhysicalWriter {
             primitive.named(field.name());
         }
         return builder.named("graphar");
+    }
+
+    private static Type listType(Field field) {
+        ColumnType element = field.type().elementType().orElseThrow();
+        Type value = listElementType(element);
+        return (field.nullable() ? Types.optionalList() : Types.requiredList())
+                .element(value)
+                .named(field.name());
+    }
+
+    private static Type listElementType(ColumnType element) {
+        LogicalTypeAnnotation logical = logicalType(element);
+        if (logical == null) {
+            return Types.repeated(physicalType(element)).named("element");
+        }
+        return Types.repeated(physicalType(element)).as(logical).named("element");
     }
 
     private static PrimitiveType.PrimitiveTypeName physicalType(ColumnType type) {
@@ -220,9 +240,27 @@ public final class ParquetPhysicalWriter implements PhysicalWriter {
                 group.add(name, require(value, Instant.class, name).toEpochMilli());
                 return;
             case LIST:
+                addList(group, field, value);
+                return;
             default:
                 throw new IllegalArgumentException(
-                        "Unsupported flat Parquet type: " + field.type().kind());
+                        "Unsupported Parquet type: " + field.type().kind());
+        }
+    }
+
+    private static void addList(Group group, Field field, Object value) {
+        if (!(value instanceof List<?>)) {
+            throw new IllegalArgumentException(
+                    "Unexpected value for " + field.name() + ": expected List");
+        }
+        Group list = group.addGroup(field.name());
+        Field element = new Field("element", field.type().elementType().orElseThrow(), false);
+        for (Object elementValue : (List<?>) value) {
+            if (elementValue == null) {
+                throw new IllegalArgumentException(
+                        "Parquet LIST elements cannot be null: " + field.name());
+            }
+            add(list.addGroup("list"), element, elementValue);
         }
     }
 
