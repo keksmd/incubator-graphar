@@ -24,17 +24,28 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
+import java.net.URI;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
+import org.apache.graphar.info.EdgeInfo;
+import org.apache.graphar.info.GraphInfo;
 import org.apache.graphar.info.loader.impl.LocalFileSystemStringGraphInfoLoader;
 import org.apache.graphar.io.parquet.ParquetPhysicalReader;
 import org.apache.graphar.reader.GraphReader;
+import org.apache.graphar.reader.NeighborCursor;
 import org.apache.graphar.reader.OrderedSourceEdgeReader;
+import org.apache.graphar.storage.InputFile;
+import org.apache.graphar.storage.OutputFile;
+import org.apache.graphar.storage.SeekableInput;
+import org.apache.graphar.storage.Storage;
 import org.apache.graphar.storage.local.LocalStorage;
+import org.apache.graphar.writer.GraphWriter;
+import org.apache.graphar.writer.TopologyEdge;
 import org.apache.ignite.Ignite;
 import org.apache.ignite.Ignition;
 import org.apache.ignite.configuration.DataRegionConfiguration;
@@ -59,6 +70,7 @@ public class IgniteCsrStoreIntegrationTest {
                 new TcpDiscoveryVmIpFinder(true).setAddresses(List.of("127.0.0.1:48500..48520"));
         Ignite nodeOne = null;
         Ignite nodeTwo = null;
+        Path generatedRoot = null;
         try {
             nodeOne =
                     Ignition.start(
@@ -68,7 +80,13 @@ public class IgniteCsrStoreIntegrationTest {
                             configuration(nodeTwoName, workRoot.resolve("two"), finder, 48501));
             assertEquals(2, nodeOne.cluster().nodes().size());
 
-            OrderedSourceEdgeReader edges = openFixture();
+            OrderedSourceEdgeReader sourceEdges = openFixture();
+            GraphInfo graphInfo = fixtureGraphInfo();
+            EdgeInfo edgeInfo = graphInfo.getEdgeInfo("person", "knows", "person");
+            generatedRoot = Files.createTempDirectory("graphar-indexed-parquet-");
+            IndexedFixture indexed =
+                    writeIndexedFixture(graphInfo, edgeInfo, generatedRoot, sourceEdges);
+            OrderedSourceEdgeReader edges = indexed.reader;
             IgniteCsrStore first = new IgniteCsrStore(nodeOne, CACHE, REGION, 128);
             IgniteCsrStore second = new IgniteCsrStore(nodeTwo, CACHE, REGION, 128);
             IgniteCsrStore.LoadResult load = first.load("fixture-snapshot-a", edges);
@@ -109,6 +127,34 @@ public class IgniteCsrStoreIntegrationTest {
                             + ", affinity_jobs_per_hop="
                             + result.shardCallsPerHop());
 
+            long parquetStarted = System.nanoTime();
+            List<Integer> parquetSizes = null;
+            indexed.storage.reset();
+            for (int iteration = 0; iteration < iterations; iteration++) {
+                parquetSizes = traverseGraphAr(edges, List.of(297L), 3, 903);
+            }
+            long parquetElapsedNanos = System.nanoTime() - parquetStarted;
+            assertEquals(List.of(1, 53, 219, 311), parquetSizes);
+            assertTrue(indexed.storage.opens > 0);
+            assertTrue(indexed.storage.bytes > 0);
+            System.out.println(
+                    "GraphAr indexed Parquet FS 3-hop benchmark: iterations="
+                            + iterations
+                            + ", total_ms="
+                            + parquetElapsedNanos / 1_000_000.0
+                            + ", avg_ms="
+                            + parquetElapsedNanos / 1_000_000.0 / iterations
+                            + ", neighbor_lookups_per_hop=[1, 53, 219]");
+            System.out.println(
+                    "GraphAr indexed Parquet FS physical IO: opens="
+                            + indexed.storage.opens
+                            + ", seeks="
+                            + indexed.storage.seeks
+                            + ", reads="
+                            + indexed.storage.reads
+                            + ", bytes="
+                            + indexed.storage.bytes);
+
         } finally {
             if (nodeTwo != null) {
                 Ignition.stop(nodeTwoName, true);
@@ -117,6 +163,9 @@ public class IgniteCsrStoreIntegrationTest {
                 Ignition.stop(nodeOneName, true);
             }
             deleteTree(workRoot);
+            if (generatedRoot != null) {
+                deleteTree(generatedRoot);
+            }
         }
     }
 
@@ -172,6 +221,150 @@ public class IgniteCsrStoreIntegrationTest {
                         new LocalStorage(),
                         new ParquetPhysicalReader(new LocalStorage()));
         return graph.edge("person", "knows", "person");
+    }
+
+    private static GraphInfo fixtureGraphInfo() throws IOException {
+        Path root = Path.of("..", "..", "testing", "ldbc_sample", "parquet");
+        return new LocalFileSystemStringGraphInfoLoader()
+                .loadGraphInfo(root.resolve("ldbc_sample.graph.yml").toUri());
+    }
+
+    private static IndexedFixture writeIndexedFixture(
+            GraphInfo graphInfo, EdgeInfo edgeInfo, Path root, OrderedSourceEdgeReader source)
+            throws IOException {
+        List<TopologyEdge> topology = new ArrayList<>();
+        try (org.apache.graphar.reader.EdgeCursor cursor = source.scanEdges()) {
+            while (cursor.next()) {
+                topology.add(new TopologyEdge(cursor.source(), cursor.destination()));
+            }
+        }
+        LocalStorage storage = new LocalStorage();
+        new GraphWriter(
+                        graphInfo,
+                        root.toUri(),
+                        storage,
+                        new org.apache.graphar.io.parquet.ParquetPhysicalWriter(storage))
+                .writeOrderedSourceTopology(edgeInfo, source.vertexCount(), topology);
+        CountingStorage counting = new CountingStorage(storage);
+        return new IndexedFixture(
+                new GraphReader(
+                                graphInfo,
+                                root.toUri(),
+                                counting,
+                                new ParquetPhysicalReader(counting))
+                        .edge("person", "knows", "person"),
+                counting);
+    }
+
+    private static List<Integer> traverseGraphAr(
+            OrderedSourceEdgeReader reader, List<Long> seeds, int hops, int maximum)
+            throws IOException {
+        java.util.Set<Long> frontier = new java.util.LinkedHashSet<>(seeds);
+        List<Integer> sizes = new ArrayList<>();
+        sizes.add(frontier.size());
+        for (int hop = 0; hop < hops; hop++) {
+            java.util.Set<Long> next = new java.util.LinkedHashSet<>();
+            for (long source : frontier) {
+                try (NeighborCursor neighbors = reader.neighbors(source)) {
+                    while (neighbors.next()) {
+                        next.add(neighbors.destination());
+                        if (next.size() > maximum) {
+                            throw new IllegalArgumentException("Traversal frontier exceeds limit.");
+                        }
+                    }
+                }
+            }
+            frontier = next;
+            sizes.add(frontier.size());
+        }
+        return sizes;
+    }
+
+    private static final class IndexedFixture {
+        private final OrderedSourceEdgeReader reader;
+        private final CountingStorage storage;
+
+        private IndexedFixture(OrderedSourceEdgeReader reader, CountingStorage storage) {
+            this.reader = reader;
+            this.storage = storage;
+        }
+    }
+
+    private static final class CountingStorage implements Storage {
+        private final Storage delegate;
+        private long opens;
+        private long seeks;
+        private long reads;
+        private long bytes;
+
+        private CountingStorage(Storage delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public InputFile inputFile(URI uri) {
+            return new InputFile() {
+                @Override
+                public URI uri() {
+                    return delegate.inputFile(uri).uri();
+                }
+
+                @Override
+                public long size() throws IOException {
+                    return delegate.inputFile(uri).size();
+                }
+
+                @Override
+                public SeekableInput open() throws IOException {
+                    opens++;
+                    SeekableInput input = delegate.inputFile(uri).open();
+                    return new SeekableInput() {
+                        @Override
+                        public long position() throws IOException {
+                            return input.position();
+                        }
+
+                        @Override
+                        public void seek(long newPosition) throws IOException {
+                            seeks++;
+                            input.seek(newPosition);
+                        }
+
+                        @Override
+                        public int read(ByteBuffer destination) throws IOException {
+                            int count = input.read(destination);
+                            reads++;
+                            if (count > 0) {
+                                bytes += count;
+                            }
+                            return count;
+                        }
+
+                        @Override
+                        public void close() throws IOException {
+                            input.close();
+                        }
+                    };
+                }
+            };
+        }
+
+        @Override
+        public OutputFile outputFile(URI uri) {
+            return delegate.outputFile(uri);
+        }
+
+        @Override
+        public boolean exists(URI uri) throws IOException {
+            return delegate.exists(uri);
+        }
+
+        private void reset() {
+            opens = 0;
+            seeks = 0;
+            reads = 0;
+            bytes = 0;
+        }
     }
 
     private static List<Long> asList(long[] values) {
