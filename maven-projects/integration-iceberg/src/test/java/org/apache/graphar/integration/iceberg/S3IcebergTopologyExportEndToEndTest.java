@@ -25,6 +25,7 @@ import static org.junit.Assert.assertTrue;
 import java.io.IOException;
 import java.lang.reflect.Proxy;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -94,20 +95,17 @@ public class S3IcebergTopologyExportEndToEndTest {
                                 Types.NestedField.required(2, "destination", Types.LongType.get())),
                         PartitionSpec.unpartitioned());
         URI tableData = URI.create(table.location() + "/data/source-topology.parquet");
-        writeIcebergDataFile(table, tableData);
-        table.newAppend()
-                .appendFile(
-                        DataFiles.builder(table.spec())
-                                .withPath(tableData.toString())
-                                .withFormat(FileFormat.PARQUET)
-                                .withFileSizeInBytes(
-                                        new IcebergFileIOStorage(table.io())
-                                                .inputFile(tableData)
-                                                .size())
-                                .withRecordCount(1300)
-                                .build())
-                .commit();
+        List<Row> snapshotEdges = new ArrayList<>();
+        for (long destination = 10000; destination < 11300; destination++) {
+            snapshotEdges.add(new Row(2, destination));
+        }
+        appendIcebergDataFile(table, tableData, snapshotEdges);
         long snapshotId = table.currentSnapshot().snapshotId();
+        appendIcebergDataFile(
+                table,
+                URI.create(table.location() + "/data/newer-edge.parquet"),
+                List.of(new Row(3, 20000)));
+        assertTrue(snapshotId != table.currentSnapshot().snapshotId());
 
         InProcessS3 s3 = new InProcessS3();
         Path staging = Files.createTempDirectory("graphar-s3-e2e-");
@@ -162,22 +160,31 @@ public class S3IcebergTopologyExportEndToEndTest {
             assertTrue("Expected actual S3 byte-range reads", s3.rangeRequestCount > 0);
             assertTrue(s3.contains(manifest));
             assertTrue(s3.contains(graphYaml));
+            assertTrue(
+                    new String(s3.object(manifest), StandardCharsets.UTF_8)
+                            .contains("iceberg_snapshot_id=" + snapshotId));
         } finally {
             deleteTree(staging);
             catalog.close();
         }
     }
 
-    private static void writeIcebergDataFile(Table table, URI dataUri) throws IOException {
+    private static void appendIcebergDataFile(Table table, URI dataUri, List<Row> rows)
+            throws IOException {
         IcebergFileIOStorage storage = new IcebergFileIOStorage(table.io());
-        List<Row> rows = new ArrayList<>();
-        for (long destination = 10000; destination < 11300; destination++) {
-            rows.add(new Row(2, destination));
-        }
         new ParquetPhysicalWriter(storage)
                 .write(
                         new WriteRequest(dataUri, INPUT_SCHEMA, WriteMode.CREATE_NEW),
                         new SingleBatchCursor(new Rows(INPUT_SCHEMA, rows)));
+        table.newAppend()
+                .appendFile(
+                        DataFiles.builder(table.spec())
+                                .withPath(dataUri.toString())
+                                .withFormat(FileFormat.PARQUET)
+                                .withFileSizeInBytes(storage.inputFile(dataUri).size())
+                                .withRecordCount(rows.size())
+                                .build())
+                .commit();
     }
 
     private static Path fixturePath() {
@@ -342,6 +349,10 @@ public class S3IcebergTopologyExportEndToEndTest {
 
         private boolean contains(URI uri) {
             return objects.containsKey(key(uri.getHost(), uri.getPath().substring(1)));
+        }
+
+        private byte[] object(URI uri) {
+            return require(uri.getHost(), uri.getPath().substring(1));
         }
 
         private byte[] require(String bucket, String objectKey) {
