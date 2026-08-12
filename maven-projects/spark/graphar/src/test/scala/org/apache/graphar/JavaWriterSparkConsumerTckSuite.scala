@@ -21,7 +21,7 @@ package org.apache.graphar
 
 import org.apache.graphar.graph.GraphReader
 import org.apache.graphar.reader.{EdgeReader, VertexReader}
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -31,8 +31,9 @@ import scala.collection.JavaConverters._
  * Consumer contract for a dataset emitted by the pure-Java GraphWriter.
  *
  * No fixture is bundled here: point this suite at an independently generated
- * dataset with `GRAPHAR_JAVA_TCK_GRAPH` or `-Dgraphar.java.tck.graph=<graph.yml>`.
- * This makes the producer and the Spark consumer separate build artifacts.
+ * dataset with `GRAPHAR_JAVA_TCK_GRAPH` or
+ * `-Dgraphar.java.tck.graph=<graph.yml>`. This makes the producer and the Spark
+ * consumer separate build artifacts.
  */
 class JavaWriterSparkConsumerTckSuite
     extends AnyFunSuite
@@ -73,76 +74,145 @@ class JavaWriterSparkConsumerTckSuite
       )
     }
     val graphInfo = GraphInfo.loadGraphInfo(graphPath, spark)
+    val activeSpark = spark
+    import activeSpark.implicits._
 
-    graphInfo.getVertexInfos.foreach {
-      case (vertexType, vertexInfo) =>
-        val vertexReader =
-          new VertexReader(graphInfo.getPrefix, vertexInfo, spark)
-        val rawVertexFrame = vertexReader.readAllVertexPropertyGroups()
-        requireVertexIndex(vertexType, rawVertexFrame.columns, graphPath)
+    // Literal producer-independent oracle. The Java TCK exporter emits these
+    // values; the Spark reader must reproduce the complete multiset, not just
+    // a compatible schema or row count.
+    val expectedVertices = Seq(
+      (0L, "person-0"),
+      (1L, "person-1"),
+      (2L, "person-2"),
+      (3L, "person-3"),
+      (4L, "person-4"),
+      (5L, "person-5")
+    ).toDF(GeneralParams.vertexIndexCol, "name")
+    val expectedEdges = Seq(
+      (0L, 1L, 0.5d),
+      (5L, 4L, 1.5d),
+      (4L, 1L, 2.5d),
+      (3L, 4L, 3.5d),
+      (2L, 1L, 4.5d),
+      (1L, 4L, 5.5d),
+      (0L, 1L, 6.5d),
+      (5L, 4L, 7.5d),
+      (4L, 1L, 8.5d),
+      (3L, 4L, 9.5d),
+      (2L, 1L, 10.5d),
+      (1L, 4L, 11.5d),
+      (0L, 1L, 12.5d),
+      (5L, 4L, 13.5d),
+      (4L, 1L, 14.5d),
+      (3L, 4L, 15.5d),
+      (2L, 1L, 16.5d)
+    ).toDF(GeneralParams.srcIndexCol, GeneralParams.dstIndexCol, "weight")
 
-        val declaredProperties = vertexInfo.getProperty_groups.asScala
-          .flatMap(_.getProperties.asScala.map(_.getName))
-          .toSet
-        assert(
-          declaredProperties.subsetOf(rawVertexFrame.columns.toSet),
-          s"Spark vertex reader lost declared properties for '$vertexType': " +
-            s"expected $declaredProperties, actual ${rawVertexFrame.columns.toSet}"
-        )
-        assert(
-          rawVertexFrame.count() == vertexReader.readVerticesNumber(),
-          s"Spark vertex row count differs from vertex_count for '$vertexType'."
-        )
+    graphInfo.getVertexInfos.foreach { case (vertexType, vertexInfo) =>
+      val vertexReader =
+        new VertexReader(graphInfo.getPrefix, vertexInfo, spark)
+      val rawVertexFrame = vertexReader.readAllVertexPropertyGroups()
+      requireVertexIndex(vertexType, rawVertexFrame.columns, graphPath)
+
+      val declaredProperties = vertexInfo.getProperty_groups.asScala
+        .flatMap(_.getProperties.asScala.map(_.getName))
+        .toSet
+      assert(
+        declaredProperties.subsetOf(rawVertexFrame.columns.toSet),
+        s"Spark vertex reader lost declared properties for '$vertexType': " +
+          s"expected $declaredProperties, actual ${rawVertexFrame.columns.toSet}"
+      )
+      assert(
+        rawVertexFrame.count() == vertexReader.readVerticesNumber(),
+        s"Spark vertex row count differs from vertex_count for '$vertexType'."
+      )
+      assertSameMultiset(
+        expectedVertices,
+        rawVertexFrame.select(GeneralParams.vertexIndexCol, "name"),
+        s"VertexReader values for '$vertexType'"
+      )
     }
 
     val (vertices, layouts) = GraphReader.read(graphPath, spark)
-    graphInfo.getVertexInfos.foreach {
-      case (vertexType, vertexInfo) =>
-        val frame = vertices(vertexType)
-        requireVertexIndex(vertexType, frame.columns, graphPath)
-        val expected =
-          new VertexReader(graphInfo.getPrefix, vertexInfo, spark)
-            .readVerticesNumber()
-        assert(
-          frame.count() == expected,
-          s"GraphReader returned an incomplete '$vertexType' frame."
-        )
+    graphInfo.getVertexInfos.foreach { case (vertexType, vertexInfo) =>
+      val frame = vertices(vertexType)
+      requireVertexIndex(vertexType, frame.columns, graphPath)
+      val expected =
+        new VertexReader(graphInfo.getPrefix, vertexInfo, spark)
+          .readVerticesNumber()
+      assert(
+        frame.count() == expected,
+        s"GraphReader returned an incomplete '$vertexType' frame."
+      )
+      assertSameMultiset(
+        expectedVertices,
+        frame.select(GeneralParams.vertexIndexCol, "name"),
+        s"GraphReader vertex values for '$vertexType'"
+      )
     }
 
-    graphInfo.getEdgeInfos.foreach {
-      case (_, edgeInfo) =>
-        val key = (
-          edgeInfo.getSrc_type(),
-          edgeInfo.getEdge_type(),
-          edgeInfo.getDst_type()
+    graphInfo.getEdgeInfos.foreach { case (_, edgeInfo) =>
+      val key = (
+        edgeInfo.getSrc_type(),
+        edgeInfo.getEdge_type(),
+        edgeInfo.getDst_type()
+      )
+      val consumerLayouts = layouts.getOrElse(
+        key,
+        fail(s"GraphReader did not expose Java-writer edge '$key'.")
+      )
+      edgeInfo.getAdj_lists.asScala.foreach { adjacentList =>
+        val layout = adjacentList.getAdjList_type_in_gar
+        val layoutName = adjacentList.getAdjList_type
+        val frame = consumerLayouts.getOrElse(
+          layoutName,
+          fail(
+            s"GraphReader did not expose Java-writer layout '$layoutName' for '$key'."
+          )
         )
-        val consumerLayouts = layouts.getOrElse(
-          key,
-          fail(s"GraphReader did not expose Java-writer edge '$key'.")
+        val expected =
+          new EdgeReader(graphInfo.getPrefix, edgeInfo, layout, spark)
+            .readEdgesNumber()
+        assert(
+          frame.count() == expected,
+          s"Spark edge count differs for '$key/$layoutName'."
         )
-        edgeInfo.getAdj_lists.asScala.foreach { adjacentList =>
-          val layout = adjacentList.getAdjList_type_in_gar
-          val layoutName = adjacentList.getAdjList_type
-          val frame = consumerLayouts.getOrElse(
-            layoutName,
-            fail(
-              s"GraphReader did not expose Java-writer layout '$layoutName' for '$key'."
-            )
-          )
-          val expected =
-            new EdgeReader(graphInfo.getPrefix, edgeInfo, layout, spark).readEdgesNumber()
-          assert(
-            frame.count() == expected,
-            s"Spark edge count differs for '$key/$layoutName'."
-          )
-          assert(
-            Set(GeneralParams.srcIndexCol, GeneralParams.dstIndexCol)
-              .subsetOf(frame.columns.toSet),
-            s"Spark edge schema for '$key/$layoutName' is missing topology columns: " +
-              frame.columns.mkString(", ")
-          )
-        }
+        assert(
+          Set(GeneralParams.srcIndexCol, GeneralParams.dstIndexCol)
+            .subsetOf(frame.columns.toSet),
+          s"Spark edge schema for '$key/$layoutName' is missing topology columns: " +
+            frame.columns.mkString(", ")
+        )
+        assert(
+          frame.columns.contains("weight"),
+          s"Spark edge schema for '$key/$layoutName' is missing weight."
+        )
+        assertSameMultiset(
+          expectedEdges,
+          frame.select(
+            GeneralParams.srcIndexCol,
+            GeneralParams.dstIndexCol,
+            "weight"
+          ),
+          s"GraphReader topology/property values for '$key/$layoutName'"
+        )
+      }
     }
+  }
+
+  private def assertSameMultiset(
+      expected: DataFrame,
+      actual: DataFrame,
+      description: String
+  ): Unit = {
+    assert(
+      expected.exceptAll(actual).count() == 0,
+      s"$description omitted or changed rows."
+    )
+    assert(
+      actual.exceptAll(expected).count() == 0,
+      s"$description added or changed rows."
+    )
   }
 
   private def requireVertexIndex(

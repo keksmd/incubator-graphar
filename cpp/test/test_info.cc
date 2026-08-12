@@ -17,16 +17,20 @@
  * under the License.
  */
 
+#include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <string>
 #include <vector>
 
 #include "./util.h"
 
 #include "arrow/api.h"
 #include "graphar/api/arrow_reader.h"
+#include "graphar/api/high_level_reader.h"
 #include "graphar/api/info.h"
 #include "graphar/fwd.h"
 #include "graphar/status.h"
@@ -131,6 +135,36 @@ TEST_CASE("Load generated Java Parquet graph through C++ readers",
   REQUIRE(graph_info->VertexInfoNum() > 0);
   REQUIRE(graph_info->EdgeInfoNum() > 0);
 
+  // These values are deliberately literal rather than derived from the Java
+  // writer. The C++ consumer must independently reconstruct the published
+  // topology/property tuples, including parallel (src, dst) edges.
+  struct ExpectedEdge {
+    IdType source;
+    IdType destination;
+    double weight;
+
+    bool operator==(const ExpectedEdge& other) const {
+      return source == other.source && destination == other.destination &&
+             weight == other.weight;
+    }
+  };
+  const std::vector<ExpectedEdge> expected_edges = {
+      {0, 1, 0.5},  {5, 4, 1.5},  {4, 1, 2.5},  {3, 4, 3.5},  {2, 1, 4.5},
+      {1, 4, 5.5},  {0, 1, 6.5},  {5, 4, 7.5},  {4, 1, 8.5},  {3, 4, 9.5},
+      {2, 1, 10.5}, {1, 4, 11.5}, {0, 1, 12.5}, {5, 4, 13.5}, {4, 1, 14.5},
+      {3, 4, 15.5}, {2, 1, 16.5},
+  };
+  const auto edge_less = [](const ExpectedEdge& left,
+                            const ExpectedEdge& right) {
+    if (left.source != right.source) {
+      return left.source < right.source;
+    }
+    if (left.destination != right.destination) {
+      return left.destination < right.destination;
+    }
+    return left.weight < right.weight;
+  };
+
   for (const auto& vertex_info : graph_info->GetVertexInfos()) {
     REQUIRE(vertex_info->PropertyGroupNum() > 0);
     for (const auto& property_group : vertex_info->GetPropertyGroups()) {
@@ -154,6 +188,19 @@ TEST_CASE("Load generated Java Parquet graph through C++ readers",
       for (const auto& property : property_group->GetProperties()) {
         REQUIRE(table->GetColumnByName(property.name) != nullptr);
       }
+
+      auto maybe_vertices =
+          VerticesCollection::Make(graph_info, vertex_info->GetType());
+      REQUIRE(maybe_vertices.status().ok());
+      const auto& vertices = maybe_vertices.value();
+      REQUIRE(vertices->size() == 6);
+      for (auto it = vertices->begin(); it != vertices->end(); ++it) {
+        REQUIRE(it.id() >= 0);
+        REQUIRE(it.id() < 6);
+        auto maybe_name = it.property<std::string>("name");
+        REQUIRE(maybe_name.status().ok());
+        REQUIRE(maybe_name.value() == "person-" + std::to_string(it.id()));
+      }
     }
   }
 
@@ -168,6 +215,29 @@ TEST_CASE("Load generated Java Parquet graph through C++ readers",
       INFO(edge_info->GetDstType());
       INFO(AdjListTypeToString(layout));
       REQUIRE(edge_info->HasAdjacentListType(layout));
+
+      auto maybe_edges = EdgesCollection::Make(
+          graph_info, edge_info->GetSrcType(), edge_info->GetEdgeType(),
+          edge_info->GetDstType(), layout);
+      INFO(maybe_edges.status().message());
+      REQUIRE(maybe_edges.status().ok());
+      const auto& edges = maybe_edges.value();
+      REQUIRE(edges->size() == expected_edges.size());
+      std::vector<ExpectedEdge> actual_edges;
+      actual_edges.reserve(edges->size());
+      for (auto it = edges->begin(); it != edges->end(); ++it) {
+        auto maybe_weight = it.property<double>("weight");
+        INFO(maybe_weight.status().message());
+        REQUIRE(maybe_weight.status().ok());
+        actual_edges.push_back(
+            {it.source(), it.destination(), maybe_weight.value()});
+      }
+      REQUIRE(actual_edges.size() == expected_edges.size());
+      std::sort(actual_edges.begin(), actual_edges.end(), edge_less);
+      auto sorted_expected_edges = expected_edges;
+      std::sort(sorted_expected_edges.begin(), sorted_expected_edges.end(),
+                edge_less);
+      REQUIRE(actual_edges == sorted_expected_edges);
 
       auto maybe_topology_reader = AdjListArrowChunkReader::Make(
           graph_info, edge_info->GetSrcType(), edge_info->GetEdgeType(),
@@ -217,7 +287,34 @@ TEST_CASE("Load generated Java Parquet graph through C++ readers",
         INFO(maybe_offset_array.status().message());
         REQUIRE(maybe_offset_array.status().ok());
         REQUIRE(maybe_offset_array.value() != nullptr);
-        REQUIRE(maybe_offset_array.value()->length() > 1);
+        auto offsets = std::static_pointer_cast<arrow::Int64Array>(
+            maybe_offset_array.value());
+        const std::array<IdType, 4> expected_first_offsets =
+            layout == AdjListType::ordered_by_source
+                ? std::array<IdType, 4>{0, 3, 5, 8}
+                : std::array<IdType, 4>{0, 0, 9, 9};
+        REQUIRE(offsets->length() ==
+                static_cast<int64_t>(expected_first_offsets.size()));
+        for (int64_t index = 0; index < offsets->length(); ++index) {
+          REQUIRE(offsets->Value(index) == expected_first_offsets[index]);
+        }
+        REQUIRE(maybe_offset_reader.value()->next_chunk().ok());
+        auto maybe_second_offset_array =
+            maybe_offset_reader.value()->GetChunk();
+        INFO(maybe_second_offset_array.status().message());
+        REQUIRE(maybe_second_offset_array.status().ok());
+        auto second_offsets = std::static_pointer_cast<arrow::Int64Array>(
+            maybe_second_offset_array.value());
+        const std::array<IdType, 4> expected_second_offsets =
+            layout == AdjListType::ordered_by_source
+                ? std::array<IdType, 4>{0, 3, 6, 9}
+                : std::array<IdType, 4>{0, 0, 8, 8};
+        REQUIRE(second_offsets->length() ==
+                static_cast<int64_t>(expected_second_offsets.size()));
+        for (int64_t index = 0; index < second_offsets->length(); ++index) {
+          REQUIRE(second_offsets->Value(index) ==
+                  expected_second_offsets[index]);
+        }
       }
     }
   }

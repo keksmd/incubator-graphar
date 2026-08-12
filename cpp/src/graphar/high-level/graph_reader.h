@@ -621,7 +621,10 @@ class EdgeIter {
         reader.next_chunk();
       }
     }
-    if (st.IsKeyError()) {
+    // seek() reports either KeyError (a short physical chunk) or IndexError
+    // (the first offset beyond the final chunk in this vertex partition).
+    // Both cases advance the iterator to the next vertex partition.
+    if (st.IsKeyError() || st.IsIndexError()) {
       st = adj_list_reader_.next_chunk();
       ++global_chunk_index_;
       ++vertex_chunk_index_;
