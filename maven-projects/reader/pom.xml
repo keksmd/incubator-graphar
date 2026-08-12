@@ -56,6 +56,11 @@
             <version>${graphar.version}</version>
         </dependency>
         <dependency>
+            <groupId>org.apache.graphar</groupId>
+            <artifactId>graphar-storage-api</artifactId>
+            <version>${graphar.version}</version>
+        </dependency>
+        <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
             <version>4.13.2</version>
