@@ -82,9 +82,11 @@
         <module>io-api</module>
         <module>io-parquet</module>
         <module>storage-local</module>
+        <module>storage-s3</module>
         <module>core</module>
         <module>reader</module>
         <module>writer</module>
+        <module>integration-iceberg</module>
     </modules>
 
     <build>
