@@ -27,8 +27,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.apache.graphar.io.BatchCursor;
-import org.apache.graphar.io.ComparisonOperator;
-import org.apache.graphar.io.Filter;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.RecordBatch;
 import org.apache.graphar.io.RowRange;
@@ -36,7 +34,10 @@ import org.apache.graphar.io.Schema;
 import org.apache.parquet.column.page.PageReadStore;
 import org.apache.parquet.example.data.Group;
 import org.apache.parquet.example.data.simple.convert.GroupRecordConverter;
+import org.apache.parquet.filter2.columnindex.RowRanges;
 import org.apache.parquet.hadoop.ParquetFileReader;
+import org.apache.parquet.hadoop.metadata.BlockMetaData;
+import org.apache.parquet.internal.filter2.columnindex.ColumnIndexStore.MissingOffsetIndexException;
 import org.apache.parquet.io.ColumnIOFactory;
 import org.apache.parquet.io.MessageColumnIO;
 import org.apache.parquet.io.RecordReader;
@@ -49,13 +50,13 @@ final class ParquetBatchCursor implements BatchCursor {
     private final MessageType readSchema;
     private final List<ParquetColumn> readColumns;
     private final Schema outputSchema;
-    private final List<Filter> filters;
     private final Map<String, Integer> readColumnIndexes;
     private final int[] outputIndexes;
     private final long rangeStart;
     private final long rangeEnd;
     private final long limit;
-    private long sourceRow;
+    private final List<BlockRange> rowGroups;
+    private int nextRowGroup;
     private long emitted;
     private boolean exhausted;
     private boolean closed;
@@ -74,13 +75,13 @@ final class ParquetBatchCursor implements BatchCursor {
         this.readSchema = readSchema;
         this.readColumns = readColumns;
         this.outputSchema = outputSchema;
-        this.filters = request.filters();
         this.readColumnIndexes = indexes(readColumns);
         this.outputIndexes = outputIndexes(outputColumns, readColumnIndexes);
         RowRange range = request.rowRange().orElse(null);
         this.rangeStart = range == null ? 0 : range.startInclusive();
         this.rangeEnd = range == null ? Long.MAX_VALUE : range.endExclusive();
         this.limit = request.limit().isPresent() ? request.limit().getAsLong() : Long.MAX_VALUE;
+        this.rowGroups = rowGroups(fileReader.getRowGroups());
     }
 
     @Override
@@ -95,33 +96,26 @@ final class ParquetBatchCursor implements BatchCursor {
         }
         try {
             while (true) {
-                PageReadStore pages = fileReader.readNextRowGroup();
-                if (pages == null) {
+                BlockRange rowGroup = nextRange();
+                if (rowGroup == null) {
                     finish();
                     return false;
                 }
+                PageReadStore pages =
+                        fileReader.readFilteredRowGroup(
+                                rowGroup.index,
+                                RowRanges.builder()
+                                        .addSelectedRange(rowGroup.start, rowGroup.end - 1)
+                                        .build());
                 try {
-                    long groupStart = sourceRow;
-                    long rowCount = pages.getRowCount();
-                    sourceRow = Math.addExact(sourceRow, rowCount);
-                    if (groupStart >= rangeEnd || sourceRow <= rangeStart) {
-                        continue;
-                    }
                     MessageColumnIO columnIO =
                             new ColumnIOFactory().getColumnIO(readSchema, fileSchema);
                     RecordReader<Group> rows =
                             columnIO.getRecordReader(pages, new GroupRecordConverter(readSchema));
                     List<ParquetRow> matched = new ArrayList<>();
-                    for (long index = 0; index < rowCount; index++) {
+                    for (long index = 0; index < pages.getRowCount(); index++) {
                         Group group = rows.read();
-                        long rowIndex = groupStart + index;
-                        if (rowIndex < rangeStart || rowIndex >= rangeEnd) {
-                            continue;
-                        }
                         Object[] values = values(group);
-                        if (!matches(values)) {
-                            continue;
-                        }
                         matched.add(new ParquetRow(project(values)));
                         emitted++;
                         if (emitted == limit) {
@@ -144,6 +138,15 @@ final class ParquetBatchCursor implements BatchCursor {
                     pages.close();
                 }
             }
+        } catch (MissingOffsetIndexException exception) {
+            try {
+                closeReader();
+            } catch (IOException closeException) {
+                exception.addSuppressed(closeException);
+            }
+            throw new UnsupportedOperationException(
+                    "Physical Parquet row ranges require an Offset Index; refusing JVM fallback.",
+                    exception);
         } catch (IOException | RuntimeException exception) {
             try {
                 closeReader();
@@ -209,54 +212,6 @@ final class ParquetBatchCursor implements BatchCursor {
         }
     }
 
-    private boolean matches(Object[] values) {
-        for (Filter filter : filters) {
-            Object value = values[readColumnIndexes.get(filter.column())];
-            if (!matches(value, filter)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static boolean matches(Object value, Filter filter) {
-        if (filter.operator() == ComparisonOperator.IS_NULL) {
-            return value == null;
-        }
-        if (filter.operator() == ComparisonOperator.IS_NOT_NULL) {
-            return value != null;
-        }
-        if (value == null) {
-            return false;
-        }
-        int comparison = compare(value, filter.value().value());
-        switch (filter.operator()) {
-            case EQUAL:
-                return comparison == 0;
-            case NOT_EQUAL:
-                return comparison != 0;
-            case LESS_THAN:
-                return comparison < 0;
-            case LESS_THAN_OR_EQUAL:
-                return comparison <= 0;
-            case GREATER_THAN:
-                return comparison > 0;
-            case GREATER_THAN_OR_EQUAL:
-                return comparison >= 0;
-            default:
-                throw new IllegalArgumentException(
-                        "Unsupported comparison operator: " + filter.operator());
-        }
-    }
-
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private static int compare(Object value, Object literal) {
-        if (value instanceof Boolean) {
-            return value.equals(literal) ? 0 : 1;
-        }
-        return ((Comparable) value).compareTo(literal);
-    }
-
     private Object[] project(Object[] values) {
         Object[] output = new Object[outputIndexes.length];
         for (int index = 0; index < outputIndexes.length; index++) {
@@ -294,5 +249,40 @@ final class ParquetBatchCursor implements BatchCursor {
             indexes[index] = readColumnIndexes.get(outputColumns.get(index).field().name());
         }
         return indexes;
+    }
+
+    private BlockRange nextRange() {
+        while (nextRowGroup < rowGroups.size()) {
+            BlockRange rowGroup = rowGroups.get(nextRowGroup++);
+            long begin = Math.max(rangeStart, rowGroup.start);
+            long end = Math.min(rangeEnd, rowGroup.end);
+            if (begin < end) {
+                return new BlockRange(rowGroup.index, begin - rowGroup.start, end - rowGroup.start);
+            }
+        }
+        return null;
+    }
+
+    private static List<BlockRange> rowGroups(List<BlockMetaData> blocks) {
+        List<BlockRange> result = new ArrayList<>(blocks.size());
+        long start = 0;
+        for (int index = 0; index < blocks.size(); index++) {
+            long end = Math.addExact(start, blocks.get(index).getRowCount());
+            result.add(new BlockRange(index, start, end));
+            start = end;
+        }
+        return List.copyOf(result);
+    }
+
+    private static final class BlockRange {
+        private final int index;
+        private final long start;
+        private final long end;
+
+        private BlockRange(int index, long start, long end) {
+            this.index = index;
+            this.start = start;
+            this.end = end;
+        }
     }
 }

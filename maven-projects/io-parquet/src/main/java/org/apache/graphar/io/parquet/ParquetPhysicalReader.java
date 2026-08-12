@@ -20,8 +20,6 @@
 package org.apache.graphar.io.parquet;
 
 import java.io.IOException;
-import java.time.Instant;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -33,7 +31,6 @@ import java.util.Objects;
 import java.util.Set;
 import org.apache.graphar.io.ColumnType;
 import org.apache.graphar.io.Field;
-import org.apache.graphar.io.Filter;
 import org.apache.graphar.io.PhysicalReader;
 import org.apache.graphar.io.ReadCapability;
 import org.apache.graphar.io.ReadReport;
@@ -52,7 +49,10 @@ import org.apache.parquet.schema.Type;
 public final class ParquetPhysicalReader implements PhysicalReader {
     private static final Set<ReadCapability> CAPABILITIES =
             Collections.unmodifiableSet(
-                    EnumSet.of(ReadCapability.PROJECTION, ReadCapability.LIMIT));
+                    EnumSet.of(
+                            ReadCapability.PROJECTION,
+                            ReadCapability.ROW_RANGE,
+                            ReadCapability.LIMIT));
 
     private final Storage storage;
 
@@ -69,6 +69,10 @@ public final class ParquetPhysicalReader implements PhysicalReader {
     @Override
     public ReadResult read(ReadRequest request) throws IOException {
         Objects.requireNonNull(request, "request");
+        if (!request.filters().isEmpty()) {
+            throw new UnsupportedOperationException(
+                    "Parquet filter pushdown is not implemented; refusing semantic fallback.");
+        }
         InputFile inputFile =
                 Objects.requireNonNull(storage.inputFile(request.uri()), "storage inputFile");
         ParquetFileReader fileReader = null;
@@ -78,9 +82,7 @@ public final class ParquetPhysicalReader implements PhysicalReader {
             List<ParquetColumn> fileColumns = columns(fileSchema);
             Map<String, ParquetColumn> columnsByName = byName(fileColumns);
             List<ParquetColumn> outputColumns = outputColumns(request, fileColumns, columnsByName);
-            validateFilters(request.filters(), columnsByName);
-            List<ParquetColumn> readColumns =
-                    readColumns(request, fileColumns, outputColumns, columnsByName);
+            List<ParquetColumn> readColumns = readColumns(fileColumns, outputColumns);
             MessageType readSchema =
                     new MessageType(fileSchema.getName(), parquetTypes(readColumns));
             fileReader.setRequestedSchema(readSchema);
@@ -148,16 +150,10 @@ public final class ParquetPhysicalReader implements PhysicalReader {
     }
 
     private static List<ParquetColumn> readColumns(
-            ReadRequest request,
-            List<ParquetColumn> fileColumns,
-            List<ParquetColumn> outputColumns,
-            Map<String, ParquetColumn> columnsByName) {
+            List<ParquetColumn> fileColumns, List<ParquetColumn> outputColumns) {
         Map<String, ParquetColumn> needed = new LinkedHashMap<>();
         for (ParquetColumn column : outputColumns) {
             needed.put(column.field().name(), column);
-        }
-        for (Filter filter : request.filters()) {
-            needed.put(filter.column(), columnsByName.get(filter.column()));
         }
         List<ParquetColumn> result = new ArrayList<>();
         for (ParquetColumn column : fileColumns) {
@@ -189,6 +185,9 @@ public final class ParquetPhysicalReader implements PhysicalReader {
         if (!request.projection().isAllColumns()) {
             applied.add(ReadCapability.PROJECTION);
         }
+        if (request.rowRange().isPresent()) {
+            applied.add(ReadCapability.ROW_RANGE);
+        }
         if (request.limit().isPresent()) {
             applied.add(ReadCapability.LIMIT);
         }
@@ -196,14 +195,7 @@ public final class ParquetPhysicalReader implements PhysicalReader {
     }
 
     private static Set<ReadCapability> declined(ReadRequest request) {
-        EnumSet<ReadCapability> declined = EnumSet.noneOf(ReadCapability.class);
-        if (request.rowRange().isPresent()) {
-            declined.add(ReadCapability.ROW_RANGE);
-        }
-        if (!request.filters().isEmpty()) {
-            declined.add(ReadCapability.FILTER);
-        }
-        return declined;
+        return Collections.emptySet();
     }
 
     private static Field toField(PrimitiveType type) {
@@ -288,67 +280,5 @@ public final class ParquetPhysicalReader implements PhysicalReader {
     private static IllegalArgumentException unsupported(PrimitiveType type, String reason) {
         return new IllegalArgumentException(
                 "Unsupported Parquet column " + type.getName() + ": " + reason);
-    }
-
-    static void validateFilters(List<Filter> filters, Map<String, ParquetColumn> columnsByName) {
-        for (Filter filter : filters) {
-            ParquetColumn column = columnsByName.get(filter.column());
-            if (column == null) {
-                throw new IllegalArgumentException("Unknown filter column: " + filter.column());
-            }
-            ColumnType.Kind kind = column.field().type().kind();
-            switch (filter.operator()) {
-                case IS_NULL:
-                case IS_NOT_NULL:
-                    continue;
-                default:
-                    break;
-            }
-            if (kind == ColumnType.Kind.BINARY || kind == ColumnType.Kind.LIST) {
-                throw new IllegalArgumentException(
-                        "Filter comparisons are unsupported for " + kind);
-            }
-            if (kind == ColumnType.Kind.BOOLEAN
-                    && filter.operator() != org.apache.graphar.io.ComparisonOperator.EQUAL
-                    && filter.operator() != org.apache.graphar.io.ComparisonOperator.NOT_EQUAL) {
-                throw new IllegalArgumentException(
-                        "Boolean filters only support equality comparisons.");
-            }
-            if (!literalClass(kind).isInstance(filter.value().value())) {
-                throw new IllegalArgumentException(
-                        "Filter literal for "
-                                + filter.column()
-                                + " must be "
-                                + literalClass(kind).getSimpleName());
-            }
-        }
-    }
-
-    private static Class<?> literalClass(ColumnType.Kind kind) {
-        switch (kind) {
-            case BOOLEAN:
-                return Boolean.class;
-            case INT8:
-                return Byte.class;
-            case INT16:
-                return Short.class;
-            case INT32:
-                return Integer.class;
-            case INT64:
-                return Long.class;
-            case FLOAT32:
-                return Float.class;
-            case FLOAT64:
-                return Double.class;
-            case STRING:
-                return String.class;
-            case DATE:
-                return LocalDate.class;
-            case TIMESTAMP_MILLIS:
-                return Instant.class;
-            default:
-                throw new IllegalArgumentException(
-                        "Filter comparisons are unsupported for " + kind);
-        }
     }
 }

@@ -74,8 +74,9 @@ public final class NeighborCursor implements AutoCloseable {
         this.edgeChunkSize = edgeChunkSize;
         this.limited = limited;
         this.reports = new ArrayList<>();
-        this.reports.add(
-                Objects.requireNonNull(offsetReport, "Offset read report cannot be null."));
+        if (offsetReport != null) {
+            this.reports.add(offsetReport);
+        }
         this.nextEdgeChunk = resolved.edgeChunks().begin();
         this.remaining = limit;
     }
@@ -126,7 +127,8 @@ public final class NeighborCursor implements AutoCloseable {
     }
 
     /**
-     * Returns immutable physical capability reports in request order, including the offset read.
+     * Returns immutable physical capability reports in request order. A cached offset index has no
+     * report because it does not issue a physical read for this cursor.
      */
     public List<ReadReport> reports() {
         return List.copyOf(reports);
@@ -156,7 +158,10 @@ public final class NeighborCursor implements AutoCloseable {
                 continue;
             }
             ReadRequest.Builder request =
-                    ReadRequest.builder(resolveUri(resolved.adjacencyChunkUri(edgeChunkIndex)))
+                    ReadRequest.builder(
+                                    DatasetUris.resolve(
+                                            datasetRoot,
+                                            resolved.adjacencyChunkUri(edgeChunkIndex)))
                             .projection(Projection.of(List.of(DESTINATION_COLUMN)))
                             .rowRange(new RowRange(rangeStart - chunkStart, rangeEnd - chunkStart));
             if (limited) {
@@ -176,9 +181,5 @@ public final class NeighborCursor implements AutoCloseable {
             batchCursor = null;
             cursor.close();
         }
-    }
-
-    private URI resolveUri(URI uri) {
-        return uri.isAbsolute() ? uri : datasetRoot.resolve(uri);
     }
 }

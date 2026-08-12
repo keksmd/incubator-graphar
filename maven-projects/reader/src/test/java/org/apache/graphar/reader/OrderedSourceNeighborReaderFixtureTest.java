@@ -21,6 +21,7 @@ package org.apache.graphar.reader;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
@@ -41,33 +42,25 @@ import org.junit.Test;
 
 public class OrderedSourceNeighborReaderFixtureTest {
     @Test
-    public void readsNeighborsAcrossAdjacencyChunksWithProjectionAndRanges() throws Exception {
+    public void rejectsPartialNeighborsWhenTheLegacyAdjacencyHasNoOffsetIndex() throws Exception {
         CapturingPhysicalReader physicalReader = new CapturingPhysicalReader(parquetReader());
         OrderedSourceNeighborReader reader =
                 new OrderedSourceNeighborReader(loadEdgeInfo(), fixtureRoot(), physicalReader);
 
-        List<Long> neighbors;
-        List<org.apache.graphar.io.ReadReport> reports;
         try (NeighborCursor cursor = reader.neighbors(297)) {
-            neighbors = destinations(cursor);
-            reports = cursor.reports();
+            UnsupportedOperationException error =
+                    assertThrows(UnsupportedOperationException.class, cursor::next);
+            assertEquals(
+                    "Physical Parquet row ranges require an Offset Index; refusing JVM fallback.",
+                    error.getMessage());
         }
 
-        assertEquals(53, neighbors.size());
-        assertEquals(
-                List.of(
-                        4L, 25L, 28L, 45L, 58L, 62L, 74L, 84L, 104L, 105L, 126L, 130L, 169L, 180L,
-                        197L, 201L, 231L, 252L, 262L, 271L, 273L, 300L, 307L, 324L, 345L, 357L,
-                        385L, 425L, 468L, 470L, 507L, 538L, 540L, 544L, 550L, 566L, 576L, 587L,
-                        604L, 614L, 622L, 623L, 652L, 671L, 678L, 698L, 749L, 756L, 777L, 840L,
-                        851L, 878L, 884L),
-                neighbors);
-        assertEquals(3, physicalReader.requests.size());
+        assertEquals(2, physicalReader.requests.size());
         assertRequest(
                 physicalReader.requests.get(0),
                 "edge/person_knows_person/ordered_by_source/offset/chunk2",
                 "_graphArOffset",
-                new RowRange(97, 99),
+                null,
                 null);
         assertRequest(
                 physicalReader.requests.get(1),
@@ -75,50 +68,27 @@ public class OrderedSourceNeighborReaderFixtureTest {
                 "_graphArDstIndex",
                 new RowRange(1008, 1024),
                 null);
-        assertRequest(
-                physicalReader.requests.get(2),
-                "edge/person_knows_person/ordered_by_source/adj_list/part2/chunk1",
-                "_graphArDstIndex",
-                new RowRange(0, 37),
-                null);
-        assertEquals(3, reports.size());
-        for (org.apache.graphar.io.ReadReport report : reports) {
-            assertTrue(report.applied().contains(ReadCapability.PROJECTION));
-            assertTrue(report.declined().contains(ReadCapability.ROW_RANGE));
-        }
     }
 
     @Test
-    public void pushesLimitWithoutOpeningUnneededEdgeChunks() throws Exception {
-        CapturingPhysicalReader unlimitedPhysicalReader =
-                new CapturingPhysicalReader(parquetReader());
-        OrderedSourceNeighborReader unlimitedReader =
-                new OrderedSourceNeighborReader(
-                        loadEdgeInfo(), fixtureRoot(), unlimitedPhysicalReader);
-        List<Long> allNeighbors;
-        try (NeighborCursor cursor = unlimitedReader.neighbors(297)) {
-            allNeighbors = destinations(cursor);
+    public void cachesCompleteOffsetChunksInMemory() throws Exception {
+        CapturingPhysicalReader physicalReader = new CapturingPhysicalReader(parquetReader());
+        OrderedSourceNeighborReader reader =
+                new OrderedSourceNeighborReader(loadEdgeInfo(), fixtureRoot(), physicalReader);
+
+        try (NeighborCursor first = reader.neighbors(297);
+                NeighborCursor second = reader.neighbors(298)) {
+            assertEquals(1, first.reports().size());
+            assertTrue(second.reports().isEmpty());
         }
 
-        CapturingPhysicalReader limitedPhysicalReader =
-                new CapturingPhysicalReader(parquetReader());
-        OrderedSourceNeighborReader limitedReader =
-                new OrderedSourceNeighborReader(
-                        loadEdgeInfo(), fixtureRoot(), limitedPhysicalReader);
-        List<Long> limitedNeighbors;
-        try (NeighborCursor cursor = limitedReader.neighbors(297, 2)) {
-            limitedNeighbors = destinations(cursor);
-            assertEquals(2, cursor.reports().size());
-        }
-
-        assertEquals(allNeighbors.subList(0, 2), limitedNeighbors);
-        assertEquals(2, limitedPhysicalReader.requests.size());
+        assertEquals(1, physicalReader.requests.size());
         assertRequest(
-                limitedPhysicalReader.requests.get(1),
-                "edge/person_knows_person/ordered_by_source/adj_list/part2/chunk0",
-                "_graphArDstIndex",
-                new RowRange(1008, 1024),
-                2L);
+                physicalReader.requests.get(0),
+                "edge/person_knows_person/ordered_by_source/offset/chunk2",
+                "_graphArOffset",
+                null,
+                null);
     }
 
     @Test
@@ -137,7 +107,7 @@ public class OrderedSourceNeighborReaderFixtureTest {
                 physicalReader.requests.get(0),
                 "edge/person_knows_person/ordered_by_source/offset/chunk2",
                 "_graphArOffset",
-                new RowRange(0, 2),
+                null,
                 null);
     }
 
@@ -175,7 +145,11 @@ public class OrderedSourceNeighborReaderFixtureTest {
             Long limit) {
         assertEquals(fixtureRoot().resolve(expectedUri), request.uri());
         assertEquals(List.of(expectedColumn), request.projection().columns());
-        assertEquals(expectedRange, request.rowRange().orElseThrow());
+        if (expectedRange == null) {
+            assertFalse(request.rowRange().isPresent());
+        } else {
+            assertEquals(expectedRange, request.rowRange().orElseThrow());
+        }
         if (limit == null) {
             assertFalse(request.limit().isPresent());
         } else {

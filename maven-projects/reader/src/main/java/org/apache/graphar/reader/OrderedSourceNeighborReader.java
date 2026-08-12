@@ -24,6 +24,10 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import org.apache.graphar.core.EdgeRange;
+import org.apache.graphar.core.OffsetChunk;
 import org.apache.graphar.core.OffsetLocation;
 import org.apache.graphar.core.OrderedAdjacencyResolver;
 import org.apache.graphar.core.ResolvedAdjacency;
@@ -35,7 +39,6 @@ import org.apache.graphar.io.Projection;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.ReadResult;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.RowRange;
 
 /** Reads destination IDs from GraphAr {@code ordered_by_source} adjacency layouts. */
 public final class OrderedSourceNeighborReader {
@@ -45,6 +48,7 @@ public final class OrderedSourceNeighborReader {
     private final URI datasetRoot;
     private final PhysicalReader physicalReader;
     private final OrderedAdjacencyResolver resolver;
+    private final ConcurrentMap<URI, OffsetChunk> offsetChunks = new ConcurrentHashMap<>();
 
     /**
      * Creates a reader whose relative GraphAr paths resolve below {@code datasetRoot}. The root
@@ -53,7 +57,7 @@ public final class OrderedSourceNeighborReader {
     public OrderedSourceNeighborReader(
             EdgeInfo edgeInfo, URI datasetRoot, PhysicalReader physicalReader) {
         this.edgeInfo = Objects.requireNonNull(edgeInfo, "Edge info cannot be null.");
-        this.datasetRoot = directoryUri(datasetRoot);
+        this.datasetRoot = DatasetUris.directory(datasetRoot);
         this.physicalReader =
                 Objects.requireNonNull(physicalReader, "Physical reader cannot be null.");
         this.resolver = new OrderedAdjacencyResolver(edgeInfo, AdjListType.ordered_by_source);
@@ -77,24 +81,11 @@ public final class OrderedSourceNeighborReader {
     private NeighborCursor openNeighbors(long sourceVertexId, long limit, boolean limited)
             throws IOException {
         OffsetLocation location = resolver.locate(sourceVertexId);
-        long offsetEnd = Math.addExact(location.offsetIndex(), 2);
-        ReadRequest request =
-                ReadRequest.builder(resolveUri(location.offsetChunkUri()))
-                        .projection(Projection.of(List.of(OFFSET_COLUMN)))
-                        .rowRange(new RowRange(location.offsetIndex(), offsetEnd))
-                        .build();
-        ReadResult result = physicalReader.read(request);
-        List<Long> offsets = readOffsets(result.cursor());
-        if (offsets.size() != 2) {
-            throw new IllegalArgumentException(
-                    "Expected two offsets for source vertex "
-                            + sourceVertexId
-                            + " but read "
-                            + offsets.size()
-                            + ".");
-        }
+        URI offsetUri = DatasetUris.resolve(datasetRoot, location.offsetChunkUri());
+        LoadedOffsetChunk loaded = loadOffsetChunk(offsetUri);
+        EdgeRange offsets = loaded.offsetChunk.rangeFor(location.offsetIndex());
         ResolvedAdjacency resolved =
-                resolver.resolve(sourceVertexId, offsets.get(0), offsets.get(1));
+                resolver.resolve(sourceVertexId, offsets.begin(), offsets.end());
         return new NeighborCursor(
                 physicalReader,
                 resolved,
@@ -102,11 +93,32 @@ public final class OrderedSourceNeighborReader {
                 edgeInfo.getChunkSize(),
                 limit,
                 limited,
-                result.report());
+                loaded.report);
     }
 
-    private static List<Long> readOffsets(BatchCursor cursor) throws IOException {
-        List<Long> offsets = new ArrayList<>(2);
+    private LoadedOffsetChunk loadOffsetChunk(URI offsetUri) throws IOException {
+        OffsetChunk cached = offsetChunks.get(offsetUri);
+        if (cached != null) {
+            return new LoadedOffsetChunk(cached, null);
+        }
+        synchronized (offsetChunks) {
+            cached = offsetChunks.get(offsetUri);
+            if (cached != null) {
+                return new LoadedOffsetChunk(cached, null);
+            }
+            ReadRequest request =
+                    ReadRequest.builder(offsetUri)
+                            .projection(Projection.of(List.of(OFFSET_COLUMN)))
+                            .build();
+            ReadResult result = physicalReader.read(request);
+            OffsetChunk loaded = OffsetChunk.of(readOffsets(result.cursor()));
+            offsetChunks.put(offsetUri, loaded);
+            return new LoadedOffsetChunk(loaded, result.report());
+        }
+    }
+
+    private static long[] readOffsets(BatchCursor cursor) throws IOException {
+        List<Long> offsets = new ArrayList<>();
         try (BatchCursor closeableCursor = cursor) {
             while (closeableCursor.next()) {
                 RecordBatch batch = closeableCursor.batch();
@@ -120,19 +132,21 @@ public final class OrderedSourceNeighborReader {
                 }
             }
         }
-        return offsets;
-    }
-
-    private URI resolveUri(URI uri) {
-        return uri.isAbsolute() ? uri : datasetRoot.resolve(uri);
-    }
-
-    private static URI directoryUri(URI datasetRoot) {
-        Objects.requireNonNull(datasetRoot, "Dataset root cannot be null.");
-        String value = datasetRoot.toString();
-        if (value.isEmpty()) {
-            throw new IllegalArgumentException("Dataset root cannot be empty.");
+        long[] values = new long[offsets.size()];
+        for (int index = 0; index < values.length; index++) {
+            values[index] = offsets.get(index);
         }
-        return value.endsWith("/") ? datasetRoot : URI.create(value + "/");
+        return values;
+    }
+
+    private static final class LoadedOffsetChunk {
+        private final OffsetChunk offsetChunk;
+        private final org.apache.graphar.io.ReadReport report;
+
+        private LoadedOffsetChunk(
+                OffsetChunk offsetChunk, org.apache.graphar.io.ReadReport report) {
+            this.offsetChunk = offsetChunk;
+            this.report = report;
+        }
     }
 }

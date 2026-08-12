@@ -21,6 +21,7 @@ package org.apache.graphar.io.parquet;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertThrows;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -29,8 +30,6 @@ import java.util.EnumSet;
 import java.util.List;
 import org.apache.graphar.io.BatchCursor;
 import org.apache.graphar.io.ComparisonOperator;
-import org.apache.graphar.io.Filter;
-import org.apache.graphar.io.Literal;
 import org.apache.graphar.io.Projection;
 import org.apache.graphar.io.ReadCapability;
 import org.apache.graphar.io.ReadRequest;
@@ -42,7 +41,7 @@ import org.junit.Test;
 
 public class ParquetPhysicalReaderFixtureTest {
     @Test
-    public void readsProjectedFilteredRangeFromLdbcParquetFixture() throws IOException {
+    public void physicallyAppliesProjectedRangeFromLdbcParquetFixture() throws IOException {
         Path fixture =
                 Path.of(
                         "..",
@@ -58,24 +57,51 @@ public class ParquetPhysicalReaderFixtureTest {
                 ReadRequest.builder(fixture.toUri())
                         .projection(Projection.of(List.of("firstName")))
                         .rowRange(new RowRange(1, 12))
-                        .filters(
-                                List.of(
-                                        Filter.comparison(
-                                                "gender",
-                                                ComparisonOperator.EQUAL,
-                                                Literal.of("male"))))
-                        .limit(2)
                         .build();
 
         ReadResult result = new ParquetPhysicalReader(new LocalStorage()).read(request);
 
         assertEquals(
-                EnumSet.of(ReadCapability.PROJECTION, ReadCapability.LIMIT),
+                EnumSet.of(ReadCapability.PROJECTION, ReadCapability.ROW_RANGE),
                 result.report().applied());
+        assertEquals(EnumSet.noneOf(ReadCapability.class), result.report().declined());
         assertEquals(
-                EnumSet.of(ReadCapability.ROW_RANGE, ReadCapability.FILTER),
-                result.report().declined());
-        assertEquals(List.of("Yacine", "Steve"), firstNames(result));
+                List.of(
+                        "Eli", "Joseph", "Yacine", "Jose", "Steve", "John", "Jun", "A. C.", "Karim",
+                        "Hermann", "Lin"),
+                firstNames(result));
+    }
+
+    @Test
+    public void rejectsFiltersUntilTheyCanBeAppliedPhysically() {
+        Path fixture =
+                Path.of(
+                        "..",
+                        "..",
+                        "testing",
+                        "ldbc_sample",
+                        "parquet",
+                        "vertex",
+                        "person",
+                        "firstName_lastName_gender",
+                        "chunk0");
+        ReadRequest request =
+                ReadRequest.builder(fixture.toUri())
+                        .filters(
+                                List.of(
+                                        org.apache.graphar.io.Filter.comparison(
+                                                "gender",
+                                                ComparisonOperator.EQUAL,
+                                                org.apache.graphar.io.Literal.of("male"))))
+                        .build();
+
+        UnsupportedOperationException error =
+                assertThrows(
+                        UnsupportedOperationException.class,
+                        () -> new ParquetPhysicalReader(new LocalStorage()).read(request));
+        assertEquals(
+                "Parquet filter pushdown is not implemented; refusing semantic fallback.",
+                error.getMessage());
     }
 
     private static List<String> firstNames(ReadResult result) throws IOException {
