@@ -98,6 +98,7 @@ public final class IcebergTopologyExporter {
      */
     public ExportResult exportOrderedSource(
             Table table,
+            long snapshotId,
             EdgeInfo edgeInfo,
             long sourceVertexCount,
             String sourceColumn,
@@ -115,11 +116,14 @@ public final class IcebergTopologyExporter {
             throw new IllegalArgumentException(
                     "Vertex count and source/destination columns must be valid.");
         }
-        Snapshot snapshot = table.currentSnapshot();
+        Snapshot snapshot = table.snapshot(snapshotId);
         if (snapshot == null) {
-            throw new IllegalArgumentException("Iceberg table has no current snapshot.");
+            throw new IllegalArgumentException("Iceberg snapshot does not exist: " + snapshotId);
         }
-        long snapshotId = snapshot.snapshotId();
+        if (!directory(grapharRoot).equals(graphWriter.datasetRoot())) {
+            throw new IllegalArgumentException(
+                    "GraphAr root must match the supplied GraphWriter dataset root.");
+        }
         IcebergFileIOStorage storage = new IcebergFileIOStorage(table.io());
         ParquetPhysicalReader parquet = new ParquetPhysicalReader(storage);
         TableScan scan =
@@ -156,13 +160,18 @@ public final class IcebergTopologyExporter {
         return new ExportResult(snapshotId, edgeCount, grapharRoot);
     }
 
+    private static URI directory(URI uri) {
+        String value = uri.toString();
+        return URI.create(value.endsWith("/") ? value : value + "/");
+    }
+
     /**
-     * Full S3/Iceberg publication vertical. It uses the table's FileIO for both the snapshot input
-     * and GraphAr output. With Iceberg S3FileIO, {@code datasetRoot} and {@code graphYamlUri} are
-     * real S3 objects. Provenance is written before the metadata root publication marker.
+     * Publishes one explicitly selected Iceberg snapshot through the table's {@code FileIO}.
+     * Provenance is written before the GraphAr root metadata publication marker.
      */
     public ExportResult exportAndPublish(
             Table table,
+            long snapshotId,
             GraphInfo graphInfo,
             EdgeInfo edgeInfo,
             long sourceVertexCount,
@@ -186,11 +195,12 @@ public final class IcebergTopologyExporter {
         ExportResult result =
                 exportOrderedSource(
                         table,
+                        snapshotId,
                         edgeInfo,
                         sourceVertexCount,
                         sourceColumn,
                         destinationColumn,
-                        graphYamlUri,
+                        datasetRoot,
                         writer);
         writeProvenance(storage, datasetRoot.resolve("iceberg-export.yml"), result, writeMode);
         writer.writeMetadata(graphYamlUri);

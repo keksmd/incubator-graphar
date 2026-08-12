@@ -100,6 +100,11 @@ public final class GraphWriter {
         this.writeMode = Objects.requireNonNull(writeMode, "Write mode cannot be null.");
     }
 
+    /** Returns the normalized root under which relative GraphAr metadata URIs are written. */
+    public URI datasetRoot() {
+        return datasetRoot;
+    }
+
     /**
      * Streams one Parquet vertex property group into GraphAr vertex chunks and writes its
      * vertex-count control file after all chunks succeed. The cursor is closed by this method.
