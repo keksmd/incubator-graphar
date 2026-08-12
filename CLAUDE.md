@@ -19,6 +19,7 @@
 - Promote only mature, standalone fork slices upstream at a measured cadence. Cut each upstream candidate from current `upstream/main` with the minimal needed commits; do not create an upstream PR for every fork commit or build a dependent PR chain.
 - Never include `tasks/`, internal process records, or fork-only links in an Apache PR.
 - Before every upstream commit or force-push, run `pre-commit run --files` on the exact changed paths. If a formatter edits files, rerun it until it passes; mark the PR checklist only with the hook result actually obtained.
+- Preserve independently useful, in-flight fork layers while parallel sessions work ahead. Do not remove a prepared future boundary solely to shrink an earlier slice; keep it isolated, tested, and out of upstream promotion until its own scope is ready.
 
 ## IO contract boundary
 
