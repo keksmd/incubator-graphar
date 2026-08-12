@@ -80,6 +80,7 @@
         <module>info</module>
         <module>storage-api</module>
         <module>io-api</module>
+        <module>io-parquet</module>
         <module>storage-local</module>
     </modules>
 
