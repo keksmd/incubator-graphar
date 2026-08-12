@@ -87,6 +87,7 @@
         <module>reader</module>
         <module>writer</module>
         <module>integration-iceberg</module>
+        <module>integration-ignite</module>
     </modules>
 
     <build>
