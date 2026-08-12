@@ -82,6 +82,7 @@
         <module>io-api</module>
         <module>io-parquet</module>
         <module>storage-local</module>
+        <module>core</module>
     </modules>
 
     <build>
