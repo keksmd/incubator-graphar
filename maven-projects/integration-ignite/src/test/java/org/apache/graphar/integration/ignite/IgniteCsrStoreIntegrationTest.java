@@ -94,6 +94,7 @@ public class IgniteCsrStoreIntegrationTest {
             long elapsedNanos = System.nanoTime() - started;
             assertEquals(List.of(1, 53, 219, 311), result.frontierSizes());
             assertEquals(311, result.frontier().size());
+            assertTrue(result.shardCallsPerHop().get(2) <= load.shardCount());
             System.out.println(
                     "Ignite CSR 3-hop benchmark: iterations="
                             + iterations
@@ -104,7 +105,10 @@ public class IgniteCsrStoreIntegrationTest {
                             + ", edges="
                             + load.edgeCount()
                             + ", shards="
-                            + load.shardCount());
+                            + load.shardCount()
+                            + ", affinity_jobs_per_hop="
+                            + result.shardCallsPerHop());
+
         } finally {
             if (nodeTwo != null) {
                 Ignition.stop(nodeTwoName, true);

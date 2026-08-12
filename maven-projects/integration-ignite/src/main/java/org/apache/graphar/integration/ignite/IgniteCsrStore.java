@@ -25,8 +25,10 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -186,7 +188,8 @@ public final class IgniteCsrStore {
     }
 
     /**
-     * Expands a frontier for {@code hops} rounds. Each adjacency lookup is colocated; bounds are
+     * Expands a frontier for {@code hops} rounds. Every round groups source vertices by their CSR
+     * shard, so it makes at most one colocated compute call per populated shard. Bounds are
      * mandatory so high-degree graphs cannot create an unbounded result in the caller heap.
      */
     public TraversalResult traverse(
@@ -204,18 +207,38 @@ public final class IgniteCsrStore {
             addBounded(frontier, seed, maxFrontierSize);
         }
         List<Integer> sizes = new ArrayList<>();
+        List<Integer> shardCalls = new ArrayList<>();
         sizes.add(frontier.size());
         for (int hop = 0; hop < hops; hop++) {
             Set<Long> next = new LinkedHashSet<>();
+            Map<ShardKey, List<Long>> sourcesByShard = new LinkedHashMap<>();
             for (long source : frontier) {
-                for (long destination : neighbors(snapshotId, source)) {
+                sourcesByShard
+                        .computeIfAbsent(
+                                new ShardKey(snapshotId, shardIndex(source)),
+                                unused -> new ArrayList<>())
+                        .add(source);
+            }
+            shardCalls.add(sourcesByShard.size());
+            for (Map.Entry<ShardKey, List<Long>> entry : sourcesByShard.entrySet()) {
+                for (long destination :
+                        ignite.compute()
+                                .affinityCall(
+                                        cacheName,
+                                        entry.getKey(),
+                                        new ExpandShardCall(
+                                                cacheName,
+                                                entry.getKey(),
+                                                entry.getValue(),
+                                                maxFrontierSize))) {
                     addBounded(next, destination, maxFrontierSize);
                 }
             }
             frontier = next;
             sizes.add(frontier.size());
         }
-        return new TraversalResult(snapshotId, List.copyOf(frontier), List.copyOf(sizes));
+        return new TraversalResult(
+                snapshotId, List.copyOf(frontier), List.copyOf(sizes), List.copyOf(shardCalls));
     }
 
     /**
@@ -334,12 +357,17 @@ public final class IgniteCsrStore {
         private final String snapshotId;
         private final List<Long> frontier;
         private final List<Integer> frontierSizes;
+        private final List<Integer> shardCallsPerHop;
 
         private TraversalResult(
-                String snapshotId, List<Long> frontier, List<Integer> frontierSizes) {
+                String snapshotId,
+                List<Long> frontier,
+                List<Integer> frontierSizes,
+                List<Integer> shardCallsPerHop) {
             this.snapshotId = snapshotId;
             this.frontier = frontier;
             this.frontierSizes = frontierSizes;
+            this.shardCallsPerHop = shardCallsPerHop;
         }
 
         public String snapshotId() {
@@ -352,6 +380,11 @@ public final class IgniteCsrStore {
 
         public List<Integer> frontierSizes() {
             return frontierSizes;
+        }
+
+        /** Returns the number of affinity jobs submitted in each traversal round. */
+        public List<Integer> shardCallsPerHop() {
+            return shardCallsPerHop;
         }
     }
 
@@ -433,6 +466,50 @@ public final class IgniteCsrStore {
                         "CSR shard is not local to its primary node: " + key);
             }
             return ignite.cluster().localNode().id();
+        }
+    }
+
+    private static final class ExpandShardCall implements IgniteCallable<long[]> {
+        private static final long serialVersionUID = 1L;
+        private final String cacheName;
+        private final ShardKey key;
+        private final List<Long> sources;
+        private final int maxResults;
+        @IgniteInstanceResource private transient Ignite ignite;
+
+        private ExpandShardCall(
+                String cacheName, ShardKey key, List<Long> sources, int maxResults) {
+            this.cacheName = cacheName;
+            this.key = key;
+            this.sources = new ArrayList<>(sources);
+            this.maxResults = maxResults;
+        }
+
+        @Override
+        public long[] call() {
+            byte[] bytes =
+                    ignite.<ShardKey, byte[]>cache(cacheName).localPeek(key, CachePeekMode.PRIMARY);
+            if (bytes == null) {
+                throw new IllegalStateException(
+                        "CSR shard is not available on its primary node: " + key);
+            }
+            Set<Long> destinations = new LinkedHashSet<>();
+            for (long source : sources) {
+                for (long destination : decodeNeighbors(bytes, source)) {
+                    destinations.add(destination);
+                    if (destinations.size() > maxResults) {
+                        throw new IllegalArgumentException(
+                                "CSR shard expansion exceeds configured frontier limit: "
+                                        + maxResults);
+                    }
+                }
+            }
+            long[] result = new long[destinations.size()];
+            int index = 0;
+            for (long destination : destinations) {
+                result[index++] = destination;
+            }
+            return result;
         }
     }
 
