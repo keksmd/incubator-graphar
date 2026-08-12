@@ -29,10 +29,8 @@ macro(add_benchmark target)
   add_executable(${target} ${add_test_SRCS})
   target_compile_features(${target} PRIVATE cxx_std_${GAR_CXX_STANDARD})
   target_include_directories(${target} PRIVATE ${PROJECT_SOURCE_DIR}/thirdparty)
-  target_link_libraries(${target}
-                        PRIVATE benchmark::benchmark_main
-                                graphar
-                                ${CMAKE_DL_LIBS})
+  target_link_libraries(${target} PRIVATE benchmark::benchmark_main graphar
+                                          ${CMAKE_DL_LIBS})
 
   if(BUILD_ARROW_FROM_SOURCE)
     target_include_directories(${target} SYSTEM BEFORE PRIVATE ${GAR_ARROW_INCLUDE_DIR})
@@ -83,3 +81,4 @@ endmacro()
 add_benchmark(arrow_chunk_reader_benchmark SRCS arrow_chunk_reader_benchmark.cc)
 add_benchmark(label_filter_benchmark SRCS label_filter_benchmark.cc)
 add_benchmark(graph_info_benchmark SRCS graph_info_benchmark.cc)
+add_benchmark(topology_scan_benchmark SRCS topology_scan_benchmark.cc)
