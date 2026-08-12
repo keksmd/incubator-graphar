@@ -22,10 +22,13 @@ package org.apache.graphar.reader;
 import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import org.apache.graphar.info.EdgeInfo;
 import org.apache.graphar.info.Property;
 import org.apache.graphar.info.PropertyGroup;
@@ -37,11 +40,13 @@ import org.apache.graphar.io.ReadReport;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.ReadResult;
 import org.apache.graphar.io.RecordBatch;
+import org.apache.graphar.io.Row;
 import org.apache.graphar.io.RowRange;
 
 /**
  * A closeable cursor that joins GraphAr topology and edge property chunks by their physical row
- * position. This preserves distinct properties for parallel topology rows.
+ * position. Topology and selected property groups are consumed in lockstep, so the cursor never
+ * materializes a complete edge chunk before returning its first row.
  */
 public final class EdgePropertyCursor implements AutoCloseable {
     private static final List<String> TOPOLOGY_COLUMNS =
@@ -53,10 +58,12 @@ public final class EdgePropertyCursor implements AutoCloseable {
     private final PhysicalReader physicalReader;
     private final List<Segment> segments;
     private final Long selectedAlignedVertex;
+    private final List<PropertyProjection> propertyProjections;
+    private final long limit;
     private final List<ReadReport> reports = new ArrayList<>();
     private int segmentIndex;
-    private List<GraphEdge> rows = List.of();
-    private int rowIndex;
+    private long emitted;
+    private SegmentStreams streams;
     private GraphEdge current;
     private boolean closed;
 
@@ -66,7 +73,9 @@ public final class EdgePropertyCursor implements AutoCloseable {
             URI datasetRoot,
             PhysicalReader physicalReader,
             List<Segment> segments,
-            Long selectedAlignedVertex) {
+            Long selectedAlignedVertex,
+            Collection<String> properties,
+            long limit) {
         this.edgeInfo = Objects.requireNonNull(edgeInfo, "Edge info cannot be null.");
         this.layout = Objects.requireNonNull(layout, "Adjacency layout cannot be null.");
         this.datasetRoot = DatasetUris.directory(datasetRoot);
@@ -74,26 +83,57 @@ public final class EdgePropertyCursor implements AutoCloseable {
                 Objects.requireNonNull(physicalReader, "Physical reader cannot be null.");
         this.segments = List.copyOf(segments);
         this.selectedAlignedVertex = selectedAlignedVertex;
+        this.propertyProjections = propertyProjections(edgeInfo, properties);
+        if (limit < 0) {
+            throw new IllegalArgumentException("Edge limit cannot be negative.");
+        }
+        this.limit = limit;
     }
 
     /** Advances to the next selected topology row. */
     public boolean next() throws IOException {
         current = null;
         while (!closed) {
-            if (rowIndex < rows.size()) {
-                GraphEdge candidate = rows.get(rowIndex++);
-                if (selectedAlignedVertex == null || aligned(candidate) == selectedAlignedVertex) {
-                    current = candidate;
-                    return true;
-                }
-                continue;
-            }
-            if (segmentIndex == segments.size()) {
+            if (emitted == limit) {
                 close();
                 return false;
             }
-            rows = readSegment(segments.get(segmentIndex++));
-            rowIndex = 0;
+            if (streams == null) {
+                if (segmentIndex == segments.size()) {
+                    close();
+                    return false;
+                }
+                streams = openSegment(segments.get(segmentIndex++));
+            }
+            Row topology = streams.topology.next();
+            if (topology == null) {
+                SegmentStreams completed = streams;
+                streams = null;
+                finish(completed);
+                continue;
+            }
+            Map<String, Object> properties = new LinkedHashMap<>();
+            for (int index = 0; index < streams.properties.size(); index++) {
+                Row propertyRow = streams.properties.get(index).rows.next();
+                if (propertyRow == null) {
+                    throw new IllegalArgumentException(
+                            "Edge property chunk row count does not match its topology chunk.");
+                }
+                List<String> names = streams.properties.get(index).projection.names;
+                for (int column = 0; column < names.size(); column++) {
+                    properties.put(names.get(column), propertyRow.value(column));
+                }
+            }
+            GraphEdge candidate =
+                    new GraphEdge(
+                            id(topology.value(0), "source"),
+                            id(topology.value(1), "destination"),
+                            properties);
+            if (selectedAlignedVertex == null || aligned(candidate) == selectedAlignedVertex) {
+                current = candidate;
+                emitted++;
+                return true;
+            }
         }
         return false;
     }
@@ -112,64 +152,72 @@ public final class EdgePropertyCursor implements AutoCloseable {
     }
 
     @Override
-    public void close() {
+    public void close() throws IOException {
+        if (closed) {
+            return;
+        }
         closed = true;
-        rows = List.of();
         current = null;
+        if (streams != null) {
+            streams.close();
+            streams = null;
+        }
     }
 
-    private List<GraphEdge> readSegment(Segment segment) throws IOException {
-        List<Object[]> topology =
-                readRows(
-                        DatasetUris.resolve(
-                                datasetRoot,
-                                edgeInfo.getAdjacentListChunkUri(
-                                        layout, segment.partition, segment.edgeChunk)),
-                        TOPOLOGY_COLUMNS,
-                        segment.range);
-        if (topology.size() != segment.range.endExclusive() - segment.range.startInclusive()) {
-            throw new IllegalArgumentException(
-                    "Topology chunk row count does not match its GraphAr edge count.");
-        }
-        List<List<Object[]>> propertyRows = new ArrayList<>();
-        List<PropertyGroup> groups = propertyGroups();
-        for (PropertyGroup group : groups) {
-            List<String> names = new ArrayList<>();
-            for (Property property : group) names.add(property.getName());
-            List<Object[]> values =
-                    readRows(
+    private SegmentStreams openSegment(Segment segment) throws IOException {
+        List<RowStream> opened = new ArrayList<>();
+        try {
+            RowStream topology =
+                    open(
                             DatasetUris.resolve(
                                     datasetRoot,
-                                    edgeInfo.getPropertyGroupChunkUri(
-                                            group, layout, segment.partition, segment.edgeChunk)),
-                            names,
-                            segment.range);
-            if (values.size() != topology.size()) {
-                throw new IllegalArgumentException(
-                        "Edge property chunk row count does not match its topology chunk.");
+                                    edgeInfo.getAdjacentListChunkUri(
+                                            layout, segment.partition, segment.edgeChunk)),
+                            TOPOLOGY_COLUMNS,
+                            segment.range,
+                            opened);
+            List<PropertyStream> properties = new ArrayList<>();
+            for (PropertyProjection projection : propertyProjections) {
+                properties.add(
+                        new PropertyStream(
+                                projection,
+                                open(
+                                        DatasetUris.resolve(
+                                                datasetRoot,
+                                                edgeInfo.getPropertyGroupChunkUri(
+                                                        projection.group,
+                                                        layout,
+                                                        segment.partition,
+                                                        segment.edgeChunk)),
+                                        projection.names,
+                                        segment.range,
+                                        opened)));
             }
-            propertyRows.add(values);
-        }
-        List<GraphEdge> result = new ArrayList<>(topology.size());
-        for (int row = 0; row < topology.size(); row++) {
-            Object[] topologyRow = topology.get(row);
-            long source = id(topologyRow[0], "source");
-            long destination = id(topologyRow[1], "destination");
-            Map<String, Object> properties = new LinkedHashMap<>();
-            for (int groupIndex = 0; groupIndex < groups.size(); groupIndex++) {
-                int propertyIndex = 0;
-                for (Property property : groups.get(groupIndex)) {
-                    properties.put(
-                            property.getName(),
-                            propertyRows.get(groupIndex).get(row)[propertyIndex++]);
-                }
+            return new SegmentStreams(topology, properties);
+        } catch (IOException | RuntimeException exception) {
+            IOException closeFailure = closeAll(opened);
+            if (closeFailure != null) {
+                exception.addSuppressed(closeFailure);
             }
-            result.add(new GraphEdge(source, destination, properties));
+            throw exception;
         }
-        return result;
     }
 
-    private List<Object[]> readRows(URI uri, List<String> projection, RowRange range)
+    private static void finish(SegmentStreams streams) throws IOException {
+        try {
+            streams.verifyExhausted();
+        } catch (IOException | RuntimeException exception) {
+            try {
+                streams.close();
+            } catch (IOException closeException) {
+                exception.addSuppressed(closeException);
+            }
+            throw exception;
+        }
+        streams.close();
+    }
+
+    private RowStream open(URI uri, List<String> projection, RowRange range, List<RowStream> opened)
             throws IOException {
         ReadResult result =
                 physicalReader.read(
@@ -178,28 +226,71 @@ public final class EdgePropertyCursor implements AutoCloseable {
                                 .rowRange(range)
                                 .build());
         reports.add(result.report());
-        List<Object[]> values = new ArrayList<>();
-        try (BatchCursor cursor = result.cursor()) {
-            while (cursor.next()) {
-                RecordBatch batch = cursor.batch();
-                for (int row = 0; row < batch.rowCount(); row++) {
-                    Object[] value = new Object[projection.size()];
-                    for (int column = 0; column < value.length; column++) {
-                        value[column] = batch.row(row).value(column);
-                    }
-                    values.add(value);
+        RowStream rows = new RowStream(result.cursor());
+        opened.add(rows);
+        return rows;
+    }
+
+    private static IOException closeAll(List<RowStream> streams) {
+        IOException failure = null;
+        for (RowStream stream : streams) {
+            try {
+                stream.close();
+            } catch (IOException exception) {
+                if (failure == null) {
+                    failure = exception;
+                } else {
+                    failure.addSuppressed(exception);
                 }
             }
         }
-        return values;
+        return failure;
     }
 
-    private List<PropertyGroup> propertyGroups() {
-        List<PropertyGroup> groups = new ArrayList<>();
-        for (int index = 0; index < edgeInfo.getPropertyGroupNum(); index++) {
-            groups.add(edgeInfo.getPropertyGroupByIndex(index));
+    private static List<PropertyProjection> propertyProjections(
+            EdgeInfo edgeInfo, Collection<String> selectedProperties) {
+        Objects.requireNonNull(selectedProperties, "Selected edge properties cannot be null.");
+        Set<String> requested = new LinkedHashSet<>();
+        for (String property : selectedProperties) {
+            if (property == null || property.isBlank()) {
+                throw new IllegalArgumentException("Selected edge property names cannot be blank.");
+            }
+            if (!requested.add(property)) {
+                throw new IllegalArgumentException(
+                        "Selected edge property is duplicated: " + property);
+            }
         }
-        return groups;
+        List<PropertyProjection> projections = new ArrayList<>();
+        Set<String> found = new LinkedHashSet<>();
+        for (int index = 0; index < edgeInfo.getPropertyGroupNum(); index++) {
+            PropertyGroup group = edgeInfo.getPropertyGroupByIndex(index);
+            List<String> names = new ArrayList<>();
+            for (Property property : group) {
+                if (requested.contains(property.getName())) {
+                    names.add(property.getName());
+                    found.add(property.getName());
+                }
+            }
+            if (!names.isEmpty()) {
+                projections.add(new PropertyProjection(group, names));
+            }
+        }
+        if (!found.equals(requested)) {
+            Set<String> unknown = new LinkedHashSet<>(requested);
+            unknown.removeAll(found);
+            throw new IllegalArgumentException("Edge info does not declare properties: " + unknown);
+        }
+        return List.copyOf(projections);
+    }
+
+    static List<String> allPropertyNames(EdgeInfo edgeInfo) {
+        List<String> names = new ArrayList<>();
+        for (int index = 0; index < edgeInfo.getPropertyGroupNum(); index++) {
+            for (Property property : edgeInfo.getPropertyGroupByIndex(index)) {
+                names.add(property.getName());
+            }
+        }
+        return List.copyOf(names);
     }
 
     private long aligned(GraphEdge edge) {
@@ -223,6 +314,101 @@ public final class EdgePropertyCursor implements AutoCloseable {
             this.partition = partition;
             this.edgeChunk = edgeChunk;
             this.range = range;
+        }
+    }
+
+    private static final class PropertyProjection {
+        private final PropertyGroup group;
+        private final List<String> names;
+
+        private PropertyProjection(PropertyGroup group, List<String> names) {
+            this.group = group;
+            this.names = List.copyOf(names);
+        }
+    }
+
+    private static final class PropertyStream {
+        private final PropertyProjection projection;
+        private final RowStream rows;
+
+        private PropertyStream(PropertyProjection projection, RowStream rows) {
+            this.projection = projection;
+            this.rows = rows;
+        }
+    }
+
+    private static final class SegmentStreams implements AutoCloseable {
+        private final RowStream topology;
+        private final List<PropertyStream> properties;
+
+        private SegmentStreams(RowStream topology, List<PropertyStream> properties) {
+            this.topology = topology;
+            this.properties = List.copyOf(properties);
+        }
+
+        private void verifyExhausted() throws IOException {
+            for (PropertyStream property : properties) {
+                if (property.rows.next() != null) {
+                    throw new IllegalArgumentException(
+                            "Edge property chunk row count does not match its topology chunk.");
+                }
+            }
+        }
+
+        @Override
+        public void close() throws IOException {
+            IOException failure = null;
+            try {
+                topology.close();
+            } catch (IOException exception) {
+                failure = exception;
+            }
+            for (PropertyStream property : properties) {
+                try {
+                    property.rows.close();
+                } catch (IOException exception) {
+                    if (failure == null) {
+                        failure = exception;
+                    } else {
+                        failure.addSuppressed(exception);
+                    }
+                }
+            }
+            if (failure != null) {
+                throw failure;
+            }
+        }
+    }
+
+    private static final class RowStream implements AutoCloseable {
+        private final BatchCursor cursor;
+        private RecordBatch batch;
+        private int row;
+        private boolean exhausted;
+
+        private RowStream(BatchCursor cursor) {
+            this.cursor = Objects.requireNonNull(cursor, "Batch cursor cannot be null.");
+        }
+
+        private Row next() throws IOException {
+            while (!exhausted) {
+                if (batch != null && row < batch.rowCount()) {
+                    return batch.row(row++);
+                }
+                if (!cursor.next()) {
+                    exhausted = true;
+                    batch = null;
+                    return null;
+                }
+                batch = Objects.requireNonNull(cursor.batch(), "Batch cursor returned null batch.");
+                row = 0;
+            }
+            return null;
+        }
+
+        @Override
+        public void close() throws IOException {
+            cursor.close();
         }
     }
 }

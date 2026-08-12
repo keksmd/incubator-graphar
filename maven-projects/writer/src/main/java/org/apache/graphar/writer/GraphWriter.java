@@ -19,17 +19,32 @@
 
 package org.apache.graphar.writer;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.EOFException;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.PriorityQueue;
 import java.util.Set;
+import java.util.stream.Stream;
 import org.apache.graphar.core.ChunkMath;
 import org.apache.graphar.info.EdgeInfo;
 import org.apache.graphar.info.GraphInfo;
@@ -54,6 +69,7 @@ import org.apache.graphar.storage.Storage;
 
 /** Writes GraphAr Parquet vertex property groups and all declared adjacency layouts. */
 public final class GraphWriter {
+    private static final int MAX_MERGE_INPUTS = 32;
     private static final Schema OFFSET_SCHEMA =
             new Schema(
                     List.of(
@@ -236,9 +252,32 @@ public final class GraphWriter {
             long alignedVertexCount,
             List<EdgeRecord> records)
             throws IOException {
+        return writeEdgeLayout(
+                        edgeInfo,
+                        layout,
+                        alignedVertexCount,
+                        (Iterable<EdgeRecord>) records,
+                        EdgeWriteOptions.defaults())
+                .edgeCount();
+    }
+
+    /**
+     * Streams an edge source through bounded external sort runs and publishes topology and edge
+     * properties in their shared physical row order. The source is consumed exactly once; the
+     * implementation never retains more than {@link EdgeWriteOptions#maxRecordsInMemory()} edge
+     * records in heap while ordering a partition.
+     */
+    public EdgeWriteStats writeEdgeLayout(
+            EdgeInfo edgeInfo,
+            AdjListType layout,
+            long alignedVertexCount,
+            Iterable<EdgeRecord> records,
+            EdgeWriteOptions options)
+            throws IOException {
         Objects.requireNonNull(edgeInfo, "Edge info cannot be null.");
         Objects.requireNonNull(layout, "Adjacency layout cannot be null.");
         Objects.requireNonNull(records, "Edge records cannot be null.");
+        Objects.requireNonNull(options, "Edge write options cannot be null.");
         if (!edgeInfo.hasAdjListType(layout)) {
             throw new IllegalArgumentException(
                     "Edge info does not declare adjacency layout: " + layout);
@@ -247,89 +286,60 @@ public final class GraphWriter {
             throw new IllegalArgumentException("Aligned vertex count must be non-negative.");
         }
         requireParquet(edgeInfo.getAdjacentList(layout).getFileType(), "adjacency");
-        List<EdgeRecord> ordered = new ArrayList<>(records);
-        validateRecords(edgeInfo, layout, alignedVertexCount, ordered);
         long vertexChunkSize =
                 layout.getAlignedBy().equals("src")
                         ? edgeInfo.getSrcChunkSize()
                         : edgeInfo.getDstChunkSize();
-        if (layout.isOrdered()) {
-            ordered.sort(Comparator.comparingLong(record -> aligned(record, layout)));
-        } else {
-            ordered.sort(
-                    Comparator.comparingLong(record -> aligned(record, layout) / vertexChunkSize));
-        }
         long partitionCount = ChunkMath.chunkCount(alignedVertexCount, vertexChunkSize);
-        int next = 0;
-        long total = 0;
         List<PropertyGroup> propertyGroups = edgePropertyGroups(edgeInfo);
-        for (long partition = 0; partition < partitionCount; partition++) {
-            long partitionStart = Math.multiplyExact(partition, vertexChunkSize);
-            long verticesInPartition =
-                    Math.min(vertexChunkSize, alignedVertexCount - partitionStart);
-            List<Row> offsets = layout.isOrdered() ? new ArrayList<>() : null;
-            if (offsets != null) offsets.add(new ArrayRow(new Object[] {0L}));
-            List<EdgeRecord> partitionRows = new ArrayList<>();
-            long partitionEdges = 0;
-            if (layout.isOrdered()) {
-                for (long local = 0; local < verticesInPartition; local++) {
-                    long alignedVertex = partitionStart + local;
-                    while (next < ordered.size()
-                            && aligned(ordered.get(next), layout) == alignedVertex) {
-                        partitionRows.add(ordered.get(next++));
-                        partitionEdges++;
-                        total++;
-                        if (partitionRows.size() == edgeInfo.getChunkSize()) {
-                            writeEdgeChunk(
-                                    edgeInfo,
-                                    layout,
-                                    partition,
-                                    partitionEdges / edgeInfo.getChunkSize() - 1,
-                                    partitionRows,
-                                    propertyGroups);
-                            partitionRows = new ArrayList<>();
-                        }
-                    }
-                    offsets.add(new ArrayRow(new Object[] {partitionEdges}));
-                }
-            } else {
-                long partitionEnd = partitionStart + verticesInPartition;
-                while (next < ordered.size() && aligned(ordered.get(next), layout) < partitionEnd) {
-                    partitionRows.add(ordered.get(next++));
-                    partitionEdges++;
-                    total++;
-                    if (partitionRows.size() == edgeInfo.getChunkSize()) {
-                        writeEdgeChunk(
+        EdgeRecordCodec codec = new EdgeRecordCodec(edgeProperties(edgeInfo));
+        Path workDirectory = Files.createTempDirectory("graphar-edge-write-");
+        long spillRuns = 0;
+        int peakRecordsBuffered = 0;
+        long total = 0;
+        try {
+            spillInput(records, codec, layout, alignedVertexCount, vertexChunkSize, workDirectory);
+            for (long partition = 0; partition < partitionCount; partition++) {
+                Path input = partitionPath(workDirectory, partition);
+                RunSet runSet =
+                        sortedRuns(
+                                input,
+                                codec,
+                                layout,
+                                options.maxRecordsInMemory(),
+                                workDirectory,
+                                partition);
+                List<Path> runs = runSet.paths;
+                spillRuns = Math.addExact(spillRuns, runs.size());
+                MergeSet merged =
+                        compactRuns(runs, codec, layout, workDirectory, partition, spillRuns);
+                runs = merged.paths;
+                spillRuns = Math.addExact(spillRuns, merged.createdRuns);
+                peakRecordsBuffered = Math.max(peakRecordsBuffered, runSet.peakRecords);
+                PartitionEdgeWriter partitionWriter =
+                        new PartitionEdgeWriter(
                                 edgeInfo,
                                 layout,
                                 partition,
-                                partitionEdges / edgeInfo.getChunkSize() - 1,
-                                partitionRows,
-                                propertyGroups);
-                        partitionRows = new ArrayList<>();
-                    }
+                                Math.multiplyExact(partition, vertexChunkSize),
+                                Math.min(
+                                        alignedVertexCount,
+                                        Math.multiplyExact(partition + 1, vertexChunkSize)),
+                                propertyGroups,
+                                codec,
+                                workDirectory);
+                mergeRuns(runs, codec, layout, partitionWriter::accept);
+                total = Math.addExact(total, partitionWriter.finish());
+                delete(input);
+                for (Path run : runs) {
+                    delete(run);
                 }
             }
-            if (!partitionRows.isEmpty()) {
-                writeEdgeChunk(
-                        edgeInfo,
-                        layout,
-                        partition,
-                        partitionEdges / edgeInfo.getChunkSize(),
-                        partitionRows,
-                        propertyGroups);
-            }
-            if (offsets != null) {
-                writeRows(edgeInfo.getOffsetChunkUri(layout, partition), OFFSET_SCHEMA, offsets);
-            }
-            writeLong(edgeInfo.getEdgesNumFileUri(layout, partition), partitionEdges);
+            writeLong(edgeInfo.getVerticesNumFileUri(layout), alignedVertexCount);
+            return new EdgeWriteStats(total, partitionCount, spillRuns, peakRecordsBuffered);
+        } finally {
+            deleteTree(workDirectory);
         }
-        if (next != ordered.size()) {
-            throw new IllegalStateException(
-                    "Validated edge records were not assigned to a partition.");
-        }
-        writeLong(edgeInfo.getVerticesNumFileUri(layout), alignedVertexCount);
-        return total;
     }
 
     /**
@@ -345,6 +355,238 @@ public final class GraphWriter {
             writeUtf8(graphUri.resolve(graphInfo.getStoreUri(edgeInfo)), edgeInfo.dump());
         }
         writeUtf8(graphUri, graphInfo.dump(graphUri));
+    }
+
+    private static void spillInput(
+            Iterable<EdgeRecord> records,
+            EdgeRecordCodec codec,
+            AdjListType layout,
+            long alignedVertexCount,
+            long vertexChunkSize,
+            Path workDirectory)
+            throws IOException {
+        try (PartitionSpillWriter partitions = new PartitionSpillWriter(workDirectory, codec)) {
+            for (EdgeRecord record : records) {
+                validateRecord(codec, layout, alignedVertexCount, record);
+                partitions.write(Math.floorDiv(aligned(record, layout), vertexChunkSize), record);
+            }
+        }
+    }
+
+    private static RunSet sortedRuns(
+            Path input,
+            EdgeRecordCodec codec,
+            AdjListType layout,
+            int maxRecords,
+            Path workDirectory,
+            long partition)
+            throws IOException {
+        if (!Files.exists(input)) {
+            return new RunSet(List.of(), 0);
+        }
+        if (!layout.isOrdered()) {
+            return new RunSet(List.of(input), 0);
+        }
+        List<Path> runs = new ArrayList<>();
+        int peakRecords = 0;
+        try (EdgeRecordInput stream = new EdgeRecordInput(input, codec)) {
+            while (true) {
+                List<EdgeRecord> records = new ArrayList<>(maxRecords);
+                while (records.size() < maxRecords) {
+                    EdgeRecord record = stream.next();
+                    if (record == null) {
+                        break;
+                    }
+                    records.add(record);
+                }
+                if (records.isEmpty()) {
+                    break;
+                }
+                peakRecords = Math.max(peakRecords, records.size());
+                records.sort(Comparator.comparingLong(record -> aligned(record, layout)));
+                Path run =
+                        workDirectory.resolve(
+                                "partition-" + partition + "-run-" + runs.size() + ".bin");
+                try (DataOutputStream output = output(run)) {
+                    for (EdgeRecord record : records) {
+                        codec.write(output, record);
+                    }
+                }
+                runs.add(run);
+            }
+        }
+        delete(input);
+        return new RunSet(List.copyOf(runs), peakRecords);
+    }
+
+    private static void mergeRuns(
+            List<Path> runs, EdgeRecordCodec codec, AdjListType layout, EdgeConsumer consumer)
+            throws IOException {
+        if (runs.size() > MAX_MERGE_INPUTS) {
+            throw new IllegalArgumentException("Merge fan-in exceeds the bounded writer limit.");
+        }
+        List<EdgeRecordInput> inputs = new ArrayList<>();
+        PriorityQueue<RunHead> heads =
+                new PriorityQueue<>(
+                        Comparator.comparingLong((RunHead head) -> aligned(head.record, layout))
+                                .thenComparingInt(head -> head.run));
+        try {
+            for (int index = 0; index < runs.size(); index++) {
+                EdgeRecordInput input = new EdgeRecordInput(runs.get(index), codec);
+                inputs.add(input);
+                EdgeRecord record = input.next();
+                if (record != null) {
+                    heads.add(new RunHead(index, record));
+                }
+            }
+            while (!heads.isEmpty()) {
+                RunHead head = heads.remove();
+                consumer.accept(head.record);
+                EdgeRecord next = inputs.get(head.run).next();
+                if (next != null) {
+                    heads.add(new RunHead(head.run, next));
+                }
+            }
+        } finally {
+            IOException closeFailure = null;
+            for (EdgeRecordInput input : inputs) {
+                try {
+                    input.close();
+                } catch (IOException exception) {
+                    if (closeFailure == null) {
+                        closeFailure = exception;
+                    } else {
+                        closeFailure.addSuppressed(exception);
+                    }
+                }
+            }
+            if (closeFailure != null) {
+                throw closeFailure;
+            }
+        }
+    }
+
+    private static MergeSet compactRuns(
+            List<Path> initial,
+            EdgeRecordCodec codec,
+            AdjListType layout,
+            Path workDirectory,
+            long partition,
+            long runSequence)
+            throws IOException {
+        List<Path> current = new ArrayList<>(initial);
+        long created = 0;
+        long sequence = runSequence;
+        while (current.size() > MAX_MERGE_INPUTS) {
+            List<Path> next = new ArrayList<>();
+            for (int start = 0; start < current.size(); start += MAX_MERGE_INPUTS) {
+                List<Path> group =
+                        current.subList(
+                                Math.min(start, current.size()),
+                                Math.min(start + MAX_MERGE_INPUTS, current.size()));
+                Path merged =
+                        workDirectory.resolve(
+                                "partition-" + partition + "-merge-" + sequence++ + ".bin");
+                try (DataOutputStream output = output(merged)) {
+                    mergeRuns(group, codec, layout, record -> codec.write(output, record));
+                }
+                for (Path path : group) {
+                    delete(path);
+                }
+                next.add(merged);
+                created++;
+            }
+            current = next;
+        }
+        return new MergeSet(List.copyOf(current), created);
+    }
+
+    private void writeEdgeChunkFromSpill(
+            EdgeInfo edgeInfo,
+            AdjListType layout,
+            long partition,
+            long edgeChunk,
+            Path chunk,
+            long count,
+            EdgeRecordCodec codec,
+            List<PropertyGroup> propertyGroups)
+            throws IOException {
+        physicalWriter.write(
+                new WriteRequest(
+                        absolute(edgeInfo.getAdjacentListChunkUri(layout, partition, edgeChunk)),
+                        TOPOLOGY_SCHEMA,
+                        writeMode),
+                new EdgeFileBatchCursor(
+                        chunk,
+                        count,
+                        codec,
+                        TOPOLOGY_SCHEMA,
+                        record ->
+                                new ArrayRow(
+                                        new Object[] {record.source(), record.destination()})));
+        for (PropertyGroup group : propertyGroups) {
+            Schema schema = schema(group);
+            physicalWriter.write(
+                    new WriteRequest(
+                            absolute(
+                                    edgeInfo.getPropertyGroupChunkUri(
+                                            group, layout, partition, edgeChunk)),
+                            schema,
+                            writeMode),
+                    new EdgeFileBatchCursor(
+                            chunk, count, codec, schema, record -> propertyRow(group, record)));
+        }
+    }
+
+    private static Row propertyRow(PropertyGroup group, EdgeRecord record) {
+        Object[] values = new Object[group.size()];
+        int index = 0;
+        for (Property property : group) {
+            values[index++] = record.properties().get(property.getName());
+        }
+        return new ArrayRow(values);
+    }
+
+    private static Path partitionPath(Path workDirectory, long partition) {
+        return workDirectory.resolve("partition-" + partition + ".bin");
+    }
+
+    private static DataOutputStream output(Path path) throws IOException {
+        return new DataOutputStream(
+                new BufferedOutputStream(
+                        Files.newOutputStream(
+                                path,
+                                StandardOpenOption.CREATE,
+                                StandardOpenOption.TRUNCATE_EXISTING,
+                                StandardOpenOption.WRITE)));
+    }
+
+    private static void delete(Path path) throws IOException {
+        Files.deleteIfExists(path);
+    }
+
+    private static void deleteTree(Path directory) throws IOException {
+        if (!Files.exists(directory)) {
+            return;
+        }
+        try (Stream<Path> paths = Files.walk(directory)) {
+            Iterator<Path> iterator = paths.sorted(Comparator.reverseOrder()).iterator();
+            IOException failure = null;
+            while (iterator.hasNext()) {
+                try {
+                    Files.deleteIfExists(iterator.next());
+                } catch (IOException exception) {
+                    if (failure == null) {
+                        failure = exception;
+                    } else {
+                        failure.addSuppressed(exception);
+                    }
+                }
+            }
+            if (failure != null) {
+                throw failure;
+            }
+        }
     }
 
     private void writeRows(URI uri, Schema schema, List<Row> rows) throws IOException {
@@ -435,6 +677,31 @@ public final class GraphWriter {
             groups.add(group);
         }
         return List.copyOf(groups);
+    }
+
+    private static List<Property> edgeProperties(EdgeInfo edgeInfo) {
+        List<Property> properties = new ArrayList<>();
+        for (int index = 0; index < edgeInfo.getPropertyGroupNum(); index++) {
+            for (Property property : edgeInfo.getPropertyGroupByIndex(index)) {
+                properties.add(property);
+            }
+        }
+        return List.copyOf(properties);
+    }
+
+    private static void validateRecord(
+            EdgeRecordCodec codec, AdjListType layout, long alignedVertexCount, EdgeRecord record) {
+        if (record == null || record.source() < 0 || record.destination() < 0) {
+            throw new IllegalArgumentException("Topology IDs must be non-negative.");
+        }
+        if (aligned(record, layout) >= alignedVertexCount) {
+            throw new IllegalArgumentException(
+                    "Aligned edge endpoint exceeds declared vertex count.");
+        }
+        if (!record.properties().keySet().equals(codec.propertyNames)) {
+            throw new IllegalArgumentException(
+                    "Edge record properties do not match EdgeInfo property groups.");
+        }
     }
 
     private void writeEdgeChunk(
@@ -562,6 +829,441 @@ public final class GraphWriter {
         Object[] values = new Object[schema.fields().size()];
         for (int index = 0; index < values.length; index++) values[index] = source.value(index);
         return new ArrayRow(values);
+    }
+
+    private final class PartitionEdgeWriter {
+        private final EdgeInfo edgeInfo;
+        private final AdjListType layout;
+        private final long partition;
+        private final long partitionEnd;
+        private final List<PropertyGroup> propertyGroups;
+        private final EdgeRecordCodec codec;
+        private final Path workDirectory;
+        private final Path offsetPath;
+        private DataOutputStream offsetOutput;
+        private long offsetCount;
+        private long nextOffsetVertex;
+        private long edgeCount;
+        private long edgeChunk;
+        private long rowsInChunk;
+        private Path chunkPath;
+        private DataOutputStream chunkOutput;
+
+        private PartitionEdgeWriter(
+                EdgeInfo edgeInfo,
+                AdjListType layout,
+                long partition,
+                long partitionStart,
+                long partitionEnd,
+                List<PropertyGroup> propertyGroups,
+                EdgeRecordCodec codec,
+                Path workDirectory)
+                throws IOException {
+            this.edgeInfo = edgeInfo;
+            this.layout = layout;
+            this.partition = partition;
+            this.partitionEnd = partitionEnd;
+            this.propertyGroups = propertyGroups;
+            this.codec = codec;
+            this.workDirectory = workDirectory;
+            this.offsetPath =
+                    layout.isOrdered()
+                            ? workDirectory.resolve("offset-" + partition + ".bin")
+                            : null;
+            if (offsetPath != null) {
+                this.offsetOutput = output(offsetPath);
+                appendOffset(0);
+            }
+            this.nextOffsetVertex = partitionStart;
+        }
+
+        private void accept(EdgeRecord record) throws IOException {
+            long aligned = aligned(record, layout);
+            if (aligned < nextOffsetVertex || aligned >= partitionEnd) {
+                throw new IllegalStateException("External edge partition order is invalid.");
+            }
+            if (offsetOutput != null) {
+                while (nextOffsetVertex < aligned) {
+                    appendOffset(edgeCount);
+                    nextOffsetVertex++;
+                }
+            }
+            if (chunkOutput == null) {
+                chunkPath = workDirectory.resolve("output-" + partition + "-" + edgeChunk + ".bin");
+                chunkOutput = output(chunkPath);
+            }
+            codec.write(chunkOutput, record);
+            rowsInChunk++;
+            edgeCount = Math.addExact(edgeCount, 1);
+            if (rowsInChunk == edgeInfo.getChunkSize()) {
+                flushChunk();
+            }
+        }
+
+        private long finish() throws IOException {
+            flushChunk();
+            if (offsetOutput != null) {
+                while (nextOffsetVertex < partitionEnd) {
+                    appendOffset(edgeCount);
+                    nextOffsetVertex++;
+                }
+                offsetOutput.close();
+                offsetOutput = null;
+                try {
+                    physicalWriter.write(
+                            new WriteRequest(
+                                    absolute(edgeInfo.getOffsetChunkUri(layout, partition)),
+                                    OFFSET_SCHEMA,
+                                    writeMode),
+                            new LongFileBatchCursor(offsetPath, offsetCount));
+                } finally {
+                    delete(offsetPath);
+                }
+            }
+            writeLong(edgeInfo.getEdgesNumFileUri(layout, partition), edgeCount);
+            return edgeCount;
+        }
+
+        private void flushChunk() throws IOException {
+            if (chunkOutput == null) {
+                return;
+            }
+            chunkOutput.close();
+            try {
+                writeEdgeChunkFromSpill(
+                        edgeInfo,
+                        layout,
+                        partition,
+                        edgeChunk++,
+                        chunkPath,
+                        rowsInChunk,
+                        codec,
+                        propertyGroups);
+            } finally {
+                delete(chunkPath);
+                chunkPath = null;
+                chunkOutput = null;
+                rowsInChunk = 0;
+            }
+        }
+
+        private void appendOffset(long value) throws IOException {
+            offsetOutput.writeLong(value);
+            offsetCount++;
+        }
+    }
+
+    private static final class EdgeRecordCodec {
+        private final List<Property> properties;
+        private final Set<String> propertyNames;
+
+        private EdgeRecordCodec(List<Property> properties) {
+            this.properties = properties;
+            Set<String> names = new HashSet<>();
+            for (Property property : properties) {
+                names.add(property.getName());
+            }
+            this.propertyNames = Set.copyOf(names);
+        }
+
+        private void write(DataOutputStream output, EdgeRecord record) throws IOException {
+            output.writeLong(record.source());
+            output.writeLong(record.destination());
+            for (Property property : properties) {
+                Object value = record.properties().get(property.getName());
+                output.writeBoolean(value != null);
+                if (value != null) {
+                    writeValue(output, property.getDataType(), value);
+                }
+            }
+        }
+
+        private EdgeRecord read(DataInputStream input) throws IOException {
+            long source = input.readLong();
+            long destination = input.readLong();
+            Map<String, Object> values = new LinkedHashMap<>();
+            for (Property property : properties) {
+                values.put(
+                        property.getName(),
+                        input.readBoolean() ? readValue(input, property.getDataType()) : null);
+            }
+            return new EdgeRecord(source, destination, values);
+        }
+
+        private void writeValue(DataOutputStream output, DataType type, Object value)
+                throws IOException {
+            if (type.isList()) {
+                if (!(value instanceof List<?>)) {
+                    throw new IllegalArgumentException(
+                            "GraphAr list property must be represented by a List.");
+                }
+                List<?> values = (List<?>) value;
+                output.writeInt(values.size());
+                for (Object element : values) {
+                    if (element == null) {
+                        throw new IllegalArgumentException(
+                                "GraphAr list properties cannot contain null values.");
+                    }
+                    writeValue(output, type.getValueType(), element);
+                }
+                return;
+            }
+            if (type.equals(DataType.BOOL)) {
+                output.writeBoolean((Boolean) value);
+            } else if (type.equals(DataType.INT32)) {
+                output.writeInt(((Number) value).intValue());
+            } else if (type.equals(DataType.INT64)) {
+                output.writeLong(((Number) value).longValue());
+            } else if (type.equals(DataType.FLOAT)) {
+                output.writeFloat(((Number) value).floatValue());
+            } else if (type.equals(DataType.DOUBLE)) {
+                output.writeDouble(((Number) value).doubleValue());
+            } else if (type.equals(DataType.STRING)) {
+                byte[] bytes = ((String) value).getBytes(StandardCharsets.UTF_8);
+                output.writeInt(bytes.length);
+                output.write(bytes);
+            } else if (type.equals(DataType.DATE)) {
+                output.writeLong(((LocalDate) value).toEpochDay());
+            } else if (type.equals(DataType.TIMESTAMP)) {
+                output.writeLong(((Instant) value).toEpochMilli());
+            } else {
+                throw new IllegalArgumentException("Unsupported GraphAr property type: " + type);
+            }
+        }
+
+        private Object readValue(DataInputStream input, DataType type) throws IOException {
+            if (type.isList()) {
+                int size = input.readInt();
+                if (size < 0) {
+                    throw new IOException("Invalid negative GraphAr list length in spill file.");
+                }
+                List<Object> values = new ArrayList<>(size);
+                for (int index = 0; index < size; index++) {
+                    values.add(readValue(input, type.getValueType()));
+                }
+                return values;
+            }
+            if (type.equals(DataType.BOOL)) return input.readBoolean();
+            if (type.equals(DataType.INT32)) return input.readInt();
+            if (type.equals(DataType.INT64)) return input.readLong();
+            if (type.equals(DataType.FLOAT)) return input.readFloat();
+            if (type.equals(DataType.DOUBLE)) return input.readDouble();
+            if (type.equals(DataType.STRING)) {
+                int size = input.readInt();
+                if (size < 0)
+                    throw new IOException("Invalid negative string length in spill file.");
+                byte[] bytes = new byte[size];
+                input.readFully(bytes);
+                return new String(bytes, StandardCharsets.UTF_8);
+            }
+            if (type.equals(DataType.DATE)) return LocalDate.ofEpochDay(input.readLong());
+            if (type.equals(DataType.TIMESTAMP)) return Instant.ofEpochMilli(input.readLong());
+            throw new IOException("Unsupported GraphAr property type: " + type);
+        }
+    }
+
+    private static final class PartitionSpillWriter implements AutoCloseable {
+        private static final int MAX_OPEN_PARTITIONS = 32;
+
+        private final Path workDirectory;
+        private final EdgeRecordCodec codec;
+        private final LinkedHashMap<Long, DataOutputStream> outputs =
+                new LinkedHashMap<>(16, 0.75F, true);
+
+        private PartitionSpillWriter(Path workDirectory, EdgeRecordCodec codec) {
+            this.workDirectory = workDirectory;
+            this.codec = codec;
+        }
+
+        private void write(long partition, EdgeRecord record) throws IOException {
+            DataOutputStream output = outputs.get(partition);
+            if (output == null) {
+                if (outputs.size() == MAX_OPEN_PARTITIONS) {
+                    Iterator<Map.Entry<Long, DataOutputStream>> iterator =
+                            outputs.entrySet().iterator();
+                    Map.Entry<Long, DataOutputStream> eldest = iterator.next();
+                    eldest.getValue().close();
+                    iterator.remove();
+                }
+                output =
+                        new DataOutputStream(
+                                new BufferedOutputStream(
+                                        Files.newOutputStream(
+                                                partitionPath(workDirectory, partition),
+                                                StandardOpenOption.CREATE,
+                                                StandardOpenOption.APPEND,
+                                                StandardOpenOption.WRITE)));
+                outputs.put(partition, output);
+            }
+            codec.write(output, record);
+        }
+
+        @Override
+        public void close() throws IOException {
+            IOException failure = null;
+            for (DataOutputStream output : outputs.values()) {
+                try {
+                    output.close();
+                } catch (IOException exception) {
+                    if (failure == null) failure = exception;
+                    else failure.addSuppressed(exception);
+                }
+            }
+            outputs.clear();
+            if (failure != null) throw failure;
+        }
+    }
+
+    private static final class EdgeRecordInput implements AutoCloseable {
+        private final DataInputStream input;
+        private final EdgeRecordCodec codec;
+
+        private EdgeRecordInput(Path path, EdgeRecordCodec codec) throws IOException {
+            this.input = new DataInputStream(new BufferedInputStream(Files.newInputStream(path)));
+            this.codec = codec;
+        }
+
+        private EdgeRecord next() throws IOException {
+            try {
+                return codec.read(input);
+            } catch (EOFException end) {
+                return null;
+            }
+        }
+
+        @Override
+        public void close() throws IOException {
+            input.close();
+        }
+    }
+
+    private static final class EdgeFileBatchCursor implements BatchCursor {
+        private static final int BATCH_ROWS = 1024;
+
+        private final EdgeRecordInput input;
+        private final long count;
+        private final Schema schema;
+        private final EdgeRowMapper mapper;
+        private long read;
+        private RecordBatch batch;
+
+        private EdgeFileBatchCursor(
+                Path path, long count, EdgeRecordCodec codec, Schema schema, EdgeRowMapper mapper)
+                throws IOException {
+            this.input = new EdgeRecordInput(path, codec);
+            this.count = count;
+            this.schema = schema;
+            this.mapper = mapper;
+        }
+
+        @Override
+        public boolean next() throws IOException {
+            if (read == count) {
+                return false;
+            }
+            int batchSize = Math.toIntExact(Math.min(BATCH_ROWS, count - read));
+            List<Row> rows = new ArrayList<>(batchSize);
+            for (int index = 0; index < batchSize; index++) {
+                EdgeRecord record = input.next();
+                if (record == null) {
+                    throw new IOException("Unexpected end of GraphAr edge spill chunk.");
+                }
+                rows.add(mapper.map(record));
+            }
+            read += batchSize;
+            batch = new ListRecordBatch(schema, rows);
+            return true;
+        }
+
+        @Override
+        public RecordBatch batch() {
+            if (batch == null) throw new IllegalStateException("Call next() before batch().");
+            return batch;
+        }
+
+        @Override
+        public void close() throws IOException {
+            input.close();
+        }
+    }
+
+    private static final class LongFileBatchCursor implements BatchCursor {
+        private static final int BATCH_ROWS = 1024;
+
+        private final DataInputStream input;
+        private final long count;
+        private long read;
+        private RecordBatch batch;
+
+        private LongFileBatchCursor(Path path, long count) throws IOException {
+            this.input = new DataInputStream(new BufferedInputStream(Files.newInputStream(path)));
+            this.count = count;
+        }
+
+        @Override
+        public boolean next() throws IOException {
+            if (read == count) {
+                return false;
+            }
+            int batchSize = Math.toIntExact(Math.min(BATCH_ROWS, count - read));
+            List<Row> rows = new ArrayList<>(batchSize);
+            for (int index = 0; index < batchSize; index++) {
+                rows.add(new ArrayRow(new Object[] {input.readLong()}));
+            }
+            read += batchSize;
+            batch = new ListRecordBatch(OFFSET_SCHEMA, rows);
+            return true;
+        }
+
+        @Override
+        public RecordBatch batch() {
+            if (batch == null) throw new IllegalStateException("Call next() before batch().");
+            return batch;
+        }
+
+        @Override
+        public void close() throws IOException {
+            input.close();
+        }
+    }
+
+    @FunctionalInterface
+    private interface EdgeConsumer {
+        void accept(EdgeRecord record) throws IOException;
+    }
+
+    private interface EdgeRowMapper {
+        Row map(EdgeRecord record);
+    }
+
+    private static final class RunHead {
+        private final int run;
+        private final EdgeRecord record;
+
+        private RunHead(int run, EdgeRecord record) {
+            this.run = run;
+            this.record = record;
+        }
+    }
+
+    private static final class RunSet {
+        private final List<Path> paths;
+        private final int peakRecords;
+
+        private RunSet(List<Path> paths, int peakRecords) {
+            this.paths = paths;
+            this.peakRecords = peakRecords;
+        }
+    }
+
+    private static final class MergeSet {
+        private final List<Path> paths;
+        private final long createdRuns;
+
+        private MergeSet(List<Path> paths, long createdRuns) {
+            this.paths = paths;
+            this.createdRuns = createdRuns;
+        }
     }
 
     private static final class ArrayRow implements Row {

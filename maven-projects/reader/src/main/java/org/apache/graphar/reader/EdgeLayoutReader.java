@@ -22,6 +22,7 @@ package org.apache.graphar.reader;
 import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import org.apache.graphar.core.ChunkMath;
@@ -79,14 +80,35 @@ public final class EdgeLayoutReader {
 
     /** Opens a cursor over every topology row and its property values. */
     public EdgePropertyCursor scanEdges() throws IOException {
+        return scanEdges(EdgePropertyCursor.allPropertyNames(edgeInfo), Long.MAX_VALUE);
+    }
+
+    /** Opens a cursor over every topology row with only the requested edge properties. */
+    public EdgePropertyCursor scanEdges(Collection<String> properties) throws IOException {
+        return scanEdges(properties, Long.MAX_VALUE);
+    }
+
+    /**
+     * Opens a bounded cursor over every topology row with only the requested edge properties. The
+     * limit is applied before opening unneeded ordered physical chunks.
+     */
+    public EdgePropertyCursor scanEdges(Collection<String> properties, long limit)
+            throws IOException {
+        requireLimit(limit);
         long vertexCount = vertexCount();
         long[] counts = partitionEdgeCounts(vertexCount);
         List<EdgePropertyCursor.Segment> segments = new ArrayList<>();
+        long remaining = limit;
         for (int partition = 0; partition < counts.length; partition++) {
-            addRange(segments, partition, 0, counts[partition]);
+            long rows = Math.min(counts[partition], remaining);
+            addRange(segments, partition, 0, rows);
+            remaining -= rows;
+            if (remaining == 0) {
+                break;
+            }
         }
         return new EdgePropertyCursor(
-                edgeInfo, layout, datasetRoot, physicalReader, segments, null);
+                edgeInfo, layout, datasetRoot, physicalReader, segments, null, properties, limit);
     }
 
     /**
@@ -94,6 +116,24 @@ public final class EdgeLayoutReader {
      * Ordered layouts use their offset index; unordered layouts scan only that aligned partition.
      */
     public EdgePropertyCursor edges(long alignedVertexId) throws IOException {
+        return edges(
+                alignedVertexId, EdgePropertyCursor.allPropertyNames(edgeInfo), Long.MAX_VALUE);
+    }
+
+    /** Opens a cursor for one aligned vertex with only the requested edge properties. */
+    public EdgePropertyCursor edges(long alignedVertexId, Collection<String> properties)
+            throws IOException {
+        return edges(alignedVertexId, properties, Long.MAX_VALUE);
+    }
+
+    /**
+     * Opens a bounded cursor for one source or destination vertex, according to this layout's
+     * alignment. Ordered layouts constrain the physical range to the requested rows; unordered
+     * layouts scan only the aligned partition because GraphAr gives them no per-vertex offset.
+     */
+    public EdgePropertyCursor edges(long alignedVertexId, Collection<String> properties, long limit)
+            throws IOException {
+        requireLimit(limit);
         long vertexCount = vertexCount();
         if (alignedVertexId < 0 || alignedVertexId >= vertexCount) {
             throw new IllegalArgumentException(
@@ -110,13 +150,27 @@ public final class EdgeLayoutReader {
                 throw new IllegalArgumentException(
                         "GraphAr offset range is outside its partition edge count.");
             }
-            addRange(segments, partition, range[0], range[1]);
+            addRange(segments, partition, range[0], boundedEnd(range[0], range[1], limit));
             return new EdgePropertyCursor(
-                    edgeInfo, layout, datasetRoot, physicalReader, segments, null);
+                    edgeInfo,
+                    layout,
+                    datasetRoot,
+                    physicalReader,
+                    segments,
+                    null,
+                    properties,
+                    limit);
         }
         addRange(segments, partition, 0, counts[(int) partition]);
         return new EdgePropertyCursor(
-                edgeInfo, layout, datasetRoot, physicalReader, segments, alignedVertexId);
+                edgeInfo,
+                layout,
+                datasetRoot,
+                physicalReader,
+                segments,
+                alignedVertexId,
+                properties,
+                limit);
     }
 
     private long[] partitionEdgeCounts(long vertexCount) throws IOException {
@@ -183,6 +237,19 @@ public final class EdgeLayoutReader {
                                 edgeChunk,
                                 new RowRange(rangeStart - chunkStart, rangeEnd - chunkStart)));
             }
+        }
+    }
+
+    private static long boundedEnd(long begin, long end, long limit) {
+        if (limit >= end - begin) {
+            return end;
+        }
+        return begin + limit;
+    }
+
+    private static void requireLimit(long limit) {
+        if (limit < 0) {
+            throw new IllegalArgumentException("Edge limit cannot be negative.");
         }
     }
 

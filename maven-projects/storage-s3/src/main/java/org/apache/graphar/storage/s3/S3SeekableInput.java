@@ -28,12 +28,20 @@ import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 
 final class S3SeekableInput implements SeekableInput {
+    /**
+     * Parquet reads its footer, indexes and page headers in many small adjacent reads. Coalescing
+     * them is essential for S3, where every range request otherwise becomes an HTTP round-trip.
+     */
+    private static final int READ_AHEAD_BYTES = 64 * 1024;
+
     private final S3Client client;
     private final S3Storage.Location location;
     private final long size;
     private final String versionId;
     private final String eTag;
     private long position;
+    private long bufferStart = -1;
+    private byte[] buffer = new byte[0];
     private boolean closed;
 
     S3SeekableInput(
@@ -73,12 +81,36 @@ final class S3SeekableInput implements SeekableInput {
         if (position >= size) {
             return -1;
         }
-        int count = (int) Math.min(destination.remaining(), size - position);
+        int copied = 0;
+        while (destination.hasRemaining() && position < size) {
+            int available = bufferedBytes();
+            if (available == 0) {
+                readAhead();
+                available = bufferedBytes();
+            }
+            int count = Math.min(destination.remaining(), available);
+            destination.put(buffer, (int) (position - bufferStart), count);
+            position += count;
+            copied += count;
+        }
+        return copied;
+    }
+
+    private int bufferedBytes() {
+        if (position < bufferStart || position >= bufferStart + buffer.length) {
+            return 0;
+        }
+        return (int) Math.min(bufferStart + buffer.length - position, Integer.MAX_VALUE);
+    }
+
+    private void readAhead() throws IOException {
+        long endExclusive = position + Math.min(size - position, READ_AHEAD_BYTES);
+        int count = (int) (endExclusive - position);
         GetObjectRequest.Builder request =
                 GetObjectRequest.builder()
                         .bucket(location.bucket)
                         .key(location.key)
-                        .range("bytes=" + position + "-" + (position + count - 1));
+                        .range("bytes=" + position + "-" + (endExclusive - 1));
         if (versionId != null) {
             request.versionId(versionId);
         } else if (eTag != null) {
@@ -92,9 +124,8 @@ final class S3SeekableInput implements SeekableInput {
                 throw new IOException(
                         "S3 returned " + bytes.length + " bytes for requested range of " + count);
             }
-            destination.put(bytes);
-            position += bytes.length;
-            return bytes.length;
+            bufferStart = position;
+            buffer = bytes;
         } catch (IOException exception) {
             throw exception;
         } catch (RuntimeException exception) {

@@ -46,6 +46,7 @@ import org.apache.parquet.schema.MessageType;
 
 /** Streams materialized Parquet row groups as neutral record batches. */
 final class ParquetBatchCursor implements BatchCursor {
+    private static final int BATCH_ROWS = 1_024;
     private final ParquetFileReader fileReader;
     private final MessageType fileSchema;
     private final MessageType readSchema;
@@ -59,6 +60,9 @@ final class ParquetBatchCursor implements BatchCursor {
     private final List<BlockRange> rowGroups;
     private int nextRowGroup;
     private long emitted;
+    private long rowsRemainingInGroup;
+    private PageReadStore pages;
+    private RecordReader<Group> rows;
     private boolean exhausted;
     private boolean closed;
     private RecordBatch current;
@@ -97,47 +101,25 @@ final class ParquetBatchCursor implements BatchCursor {
         }
         try {
             while (true) {
-                BlockRange rowGroup = nextRange();
-                if (rowGroup == null) {
+                if (rows == null && !openNextRowGroup()) {
                     finish();
                     return false;
                 }
-                PageReadStore pages =
-                        fileReader.readFilteredRowGroup(
-                                rowGroup.index,
-                                RowRanges.builder()
-                                        .addSelectedRange(rowGroup.start, rowGroup.end - 1)
-                                        .build());
-                try {
-                    MessageColumnIO columnIO =
-                            new ColumnIOFactory().getColumnIO(readSchema, fileSchema);
-                    RecordReader<Group> rows =
-                            columnIO.getRecordReader(pages, new GroupRecordConverter(readSchema));
-                    List<ParquetRow> matched = new ArrayList<>();
-                    for (long index = 0; index < pages.getRowCount(); index++) {
-                        Group group = rows.read();
-                        Object[] values = values(group);
-                        matched.add(new ParquetRow(project(values)));
-                        emitted++;
-                        if (emitted == limit) {
-                            exhausted = true;
-                            break;
-                        }
-                    }
-                    if (!matched.isEmpty()) {
-                        current = new ParquetRecordBatch(outputSchema, matched);
-                        if (exhausted) {
-                            closeReader();
-                        }
-                        return true;
-                    }
-                    if (exhausted) {
-                        finish();
-                        return false;
-                    }
-                } finally {
-                    pages.close();
+                int batchSize =
+                        (int) Math.min(Math.min(rowsRemainingInGroup, BATCH_ROWS), limit - emitted);
+                List<ParquetRow> matched = new ArrayList<>(batchSize);
+                for (int index = 0; index < batchSize; index++) {
+                    Group group = rows.read();
+                    matched.add(new ParquetRow(project(values(group))));
+                    emitted++;
+                    rowsRemainingInGroup--;
                 }
+                if (rowsRemainingInGroup == 0) {
+                    closePages();
+                }
+                current = new ParquetRecordBatch(outputSchema, matched);
+                if (emitted == limit) exhausted = true;
+                return true;
             }
         } catch (MissingOffsetIndexException exception) {
             try {
@@ -269,7 +251,40 @@ final class ParquetBatchCursor implements BatchCursor {
     private void closeReader() throws IOException {
         if (!closed) {
             closed = true;
-            fileReader.close();
+            try {
+                closePages();
+            } finally {
+                fileReader.close();
+            }
+        }
+    }
+
+    private boolean openNextRowGroup() throws IOException {
+        BlockRange rowGroup = nextRange();
+        if (rowGroup == null) return false;
+        pages =
+                fileReader.readFilteredRowGroup(
+                        rowGroup.index,
+                        RowRanges.builder()
+                                .addSelectedRange(rowGroup.start, rowGroup.end - 1)
+                                .build());
+        MessageColumnIO columnIO = new ColumnIOFactory().getColumnIO(readSchema, fileSchema);
+        rows = columnIO.getRecordReader(pages, new GroupRecordConverter(readSchema));
+        rowsRemainingInGroup = pages.getRowCount();
+        if (rowsRemainingInGroup == 0) {
+            closePages();
+            return openNextRowGroup();
+        }
+        return true;
+    }
+
+    private void closePages() throws IOException {
+        rows = null;
+        rowsRemainingInGroup = 0;
+        if (pages != null) {
+            PageReadStore openPages = pages;
+            pages = null;
+            openPages.close();
         }
     }
 

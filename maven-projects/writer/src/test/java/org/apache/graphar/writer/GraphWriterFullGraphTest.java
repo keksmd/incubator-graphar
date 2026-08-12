@@ -29,6 +29,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import org.apache.graphar.info.AdjacentList;
@@ -162,6 +163,116 @@ public class GraphWriterFullGraphTest {
                                                     List.of("duplicate", "duplicate")
                                                 }))));
         assertFalse(Files.exists(rootPath.resolve("vertex/person/attributes/chunk0")));
+    }
+
+    @Test
+    public void streamsExternalSortRunsWithoutRetainingTheWholeEdgeSource() throws Exception {
+        Path rootPath = temporaryFolder.newFolder("streaming-graph").toPath();
+        URI root = rootPath.toUri();
+        Definition definition = definition(root);
+        LocalStorage storage = new LocalStorage();
+        GraphWriter writer =
+                new GraphWriter(
+                        definition.graph,
+                        root,
+                        storage,
+                        new ParquetPhysicalWriter(storage),
+                        WriteMode.OVERWRITE);
+
+        GraphReader reader =
+                new GraphReader(
+                        definition.graph, root, storage, new ParquetPhysicalReader(storage));
+        for (AdjListType layout : AdjListType.values()) {
+            EdgeWriteStats stats =
+                    writer.writeEdgeLayout(
+                            definition.edge,
+                            layout,
+                            13,
+                            generatedEdges(97),
+                            new EdgeWriteOptions(3));
+            assertEquals(97, stats.edgeCount());
+            assertEquals(7, stats.partitionCount());
+            assertTrue(stats.peakRecordsBuffered() <= 3);
+            if (layout.isOrdered()) {
+                assertTrue(stats.spillRunCount() > 7);
+            }
+            assertEquals(97, scan(reader, layout).size());
+        }
+        assertEquals(8, selected(reader, AdjListType.ordered_by_source, 0).size());
+    }
+
+    @Test
+    public void compactsMoreThanOneMergeFanInOfSortedRuns() throws Exception {
+        Path rootPath = temporaryFolder.newFolder("multi-pass-merge").toPath();
+        URI root = rootPath.toUri();
+        Definition definition = definition(root);
+        LocalStorage storage = new LocalStorage();
+        GraphWriter writer =
+                new GraphWriter(
+                        definition.graph,
+                        root,
+                        storage,
+                        new ParquetPhysicalWriter(storage),
+                        WriteMode.OVERWRITE);
+
+        EdgeWriteStats stats =
+                writer.writeEdgeLayout(
+                        definition.edge,
+                        AdjListType.ordered_by_source,
+                        1,
+                        repeatedSourceEdges(100),
+                        new EdgeWriteOptions(3));
+
+        assertEquals(100, stats.edgeCount());
+        assertTrue(stats.spillRunCount() >= 36);
+        assertTrue(stats.peakRecordsBuffered() <= 3);
+        GraphReader reader =
+                new GraphReader(
+                        definition.graph, root, storage, new ParquetPhysicalReader(storage));
+        assertEquals(100, scan(reader, AdjListType.ordered_by_source).size());
+    }
+
+    private static Iterable<EdgeRecord> generatedEdges(int count) {
+        return () ->
+                new Iterator<EdgeRecord>() {
+                    private int index;
+
+                    @Override
+                    public boolean hasNext() {
+                        return index < count;
+                    }
+
+                    @Override
+                    public EdgeRecord next() {
+                        int current = index++;
+                        long source = Math.floorMod(current * 7L, 13);
+                        return new EdgeRecord(
+                                source,
+                                Math.floorMod(current * 11L + 1, 13),
+                                Map.of("weight", (double) current, "kind", "edge-" + current));
+                    }
+                };
+    }
+
+    private static Iterable<EdgeRecord> repeatedSourceEdges(int count) {
+        return () ->
+                new Iterator<EdgeRecord>() {
+                    private int index;
+
+                    @Override
+                    public boolean hasNext() {
+                        return index < count;
+                    }
+
+                    @Override
+                    public EdgeRecord next() {
+                        int current = index++;
+                        return new EdgeRecord(
+                                0,
+                                0,
+                                Map.of("weight", (double) current, "kind", "edge-" + current));
+                    }
+                };
     }
 
     private static List<String> scan(GraphReader reader, AdjListType layout) throws Exception {

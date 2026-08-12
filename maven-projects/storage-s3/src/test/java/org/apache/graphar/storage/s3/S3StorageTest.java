@@ -23,7 +23,9 @@ import java.lang.reflect.Proxy;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import org.apache.graphar.storage.PositionOutput;
 import org.apache.graphar.storage.SeekableInput;
 import org.junit.Assert;
@@ -55,7 +57,7 @@ public class S3StorageTest {
             Assert.assertEquals(3, input.read(bytes));
             Assert.assertArrayEquals("cde".getBytes(), bytes.array());
         }
-        Assert.assertEquals("bytes=2-4", log.range);
+        Assert.assertEquals("bytes=2-5", log.range);
         Assert.assertEquals("version-1", log.versionId);
 
         URI target = URI.create("s3://bucket/graph/new.bin");
@@ -66,9 +68,31 @@ public class S3StorageTest {
         Assert.assertArrayEquals(new byte[] {9, 8, 7}, log.putBytes);
     }
 
+    @Test
+    public void coalescesManyAdjacentSmallReadsIntoOnePinnedRangeRequest() throws Exception {
+        byte[] object = new byte[256 * 1024];
+        for (int index = 0; index < object.length; index++) object[index] = (byte) index;
+        RequestLog log = new RequestLog(object);
+        S3Storage storage =
+                new S3Storage(log.client(), Files.createTempDirectory("graphar-s3-read-ahead"));
+
+        try (SeekableInput input =
+                storage.inputFile(URI.create("s3://bucket/graph/a.parquet")).open()) {
+            ByteBuffer byteValue = ByteBuffer.allocate(1);
+            for (int index = 0; index < 10_000; index++) {
+                byteValue.clear();
+                Assert.assertEquals(1, input.read(byteValue));
+                Assert.assertEquals((byte) index, byteValue.array()[0]);
+            }
+        }
+        Assert.assertEquals(1, log.ranges.size());
+        Assert.assertEquals("bytes=0-65535", log.ranges.get(0));
+    }
+
     private static final class RequestLog {
         private final byte[] object;
         private String range;
+        private final List<String> ranges = new ArrayList<>();
         private String versionId;
         private String ifNoneMatch;
         private byte[] putBytes;
@@ -95,6 +119,7 @@ public class S3StorageTest {
                                 if ("getObject".equals(method.getName())) {
                                     GetObjectRequest request = (GetObjectRequest) arguments[0];
                                     range = request.range();
+                                    ranges.add(range);
                                     versionId = request.versionId();
                                     String[] bounds = range.substring("bytes=".length()).split("-");
                                     int start = Integer.parseInt(bounds[0]);
