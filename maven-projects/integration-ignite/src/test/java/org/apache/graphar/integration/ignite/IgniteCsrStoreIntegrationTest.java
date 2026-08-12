@@ -35,9 +35,13 @@ import java.util.UUID;
 import org.apache.graphar.info.EdgeInfo;
 import org.apache.graphar.info.GraphInfo;
 import org.apache.graphar.info.loader.impl.LocalFileSystemStringGraphInfoLoader;
+import org.apache.graphar.io.BatchCursor;
+import org.apache.graphar.io.PhysicalReader;
+import org.apache.graphar.io.ReadRequest;
+import org.apache.graphar.io.ReadResult;
+import org.apache.graphar.io.RecordBatch;
 import org.apache.graphar.io.parquet.ParquetPhysicalReader;
 import org.apache.graphar.reader.GraphReader;
-import org.apache.graphar.reader.NeighborCursor;
 import org.apache.graphar.reader.OrderedSourceEdgeReader;
 import org.apache.graphar.storage.InputFile;
 import org.apache.graphar.storage.OutputFile;
@@ -130,12 +134,14 @@ public class IgniteCsrStoreIntegrationTest {
             long parquetStarted = System.nanoTime();
             List<Integer> parquetSizes = null;
             indexed.storage.reset();
+            indexed.physicalReader.reset();
             for (int iteration = 0; iteration < iterations; iteration++) {
                 parquetSizes = traverseGraphAr(edges, List.of(297L), 3, 903);
             }
             long parquetElapsedNanos = System.nanoTime() - parquetStarted;
             assertEquals(List.of(1, 53, 219, 311), parquetSizes);
             assertTrue(indexed.storage.opens > 0);
+            assertTrue("Expected adjacency-chunk batching", indexed.storage.opens < 300);
             assertTrue(indexed.storage.bytes > 0);
             System.out.println(
                     "GraphAr indexed Parquet FS 3-hop benchmark: iterations="
@@ -153,7 +159,14 @@ public class IgniteCsrStoreIntegrationTest {
                             + ", reads="
                             + indexed.storage.reads
                             + ", bytes="
-                            + indexed.storage.bytes);
+                            + indexed.storage.bytes
+                            + ", storage_io_ms="
+                            + indexed.storage.ioNanos / 1_000_000.0);
+            System.out.println(
+                    "GraphAr indexed Parquet Java work: reader_open_ms="
+                            + indexed.physicalReader.openNanos / 1_000_000.0
+                            + ", cursor_next_ms="
+                            + indexed.physicalReader.nextNanos / 1_000_000.0);
 
         } finally {
             if (nodeTwo != null) {
@@ -246,14 +259,13 @@ public class IgniteCsrStoreIntegrationTest {
                         new org.apache.graphar.io.parquet.ParquetPhysicalWriter(storage))
                 .writeOrderedSourceTopology(edgeInfo, source.vertexCount(), topology);
         CountingStorage counting = new CountingStorage(storage);
+        TimingPhysicalReader physicalReader =
+                new TimingPhysicalReader(new ParquetPhysicalReader(counting));
         return new IndexedFixture(
-                new GraphReader(
-                                graphInfo,
-                                root.toUri(),
-                                counting,
-                                new ParquetPhysicalReader(counting))
+                new GraphReader(graphInfo, root.toUri(), counting, physicalReader)
                         .edge("person", "knows", "person"),
-                counting);
+                counting,
+                physicalReader);
     }
 
     private static List<Integer> traverseGraphAr(
@@ -264,13 +276,11 @@ public class IgniteCsrStoreIntegrationTest {
         sizes.add(frontier.size());
         for (int hop = 0; hop < hops; hop++) {
             java.util.Set<Long> next = new java.util.LinkedHashSet<>();
-            for (long source : frontier) {
-                try (NeighborCursor neighbors = reader.neighbors(source)) {
-                    while (neighbors.next()) {
-                        next.add(neighbors.destination());
-                        if (next.size() > maximum) {
-                            throw new IllegalArgumentException("Traversal frontier exceeds limit.");
-                        }
+            for (List<Long> neighbors : reader.neighbors(frontier).values()) {
+                for (long destination : neighbors) {
+                    next.add(destination);
+                    if (next.size() > maximum) {
+                        throw new IllegalArgumentException("Traversal frontier exceeds limit.");
                     }
                 }
             }
@@ -283,10 +293,78 @@ public class IgniteCsrStoreIntegrationTest {
     private static final class IndexedFixture {
         private final OrderedSourceEdgeReader reader;
         private final CountingStorage storage;
+        private final TimingPhysicalReader physicalReader;
 
-        private IndexedFixture(OrderedSourceEdgeReader reader, CountingStorage storage) {
+        private IndexedFixture(
+                OrderedSourceEdgeReader reader,
+                CountingStorage storage,
+                TimingPhysicalReader physicalReader) {
             this.reader = reader;
             this.storage = storage;
+            this.physicalReader = physicalReader;
+        }
+    }
+
+    private static final class TimingPhysicalReader implements PhysicalReader {
+        private final PhysicalReader delegate;
+        private long openNanos;
+        private long nextNanos;
+
+        private TimingPhysicalReader(PhysicalReader delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public java.util.Set<org.apache.graphar.io.ReadCapability> capabilities() {
+            return delegate.capabilities();
+        }
+
+        @Override
+        public ReadResult read(ReadRequest request) throws IOException {
+            long started = System.nanoTime();
+            ReadResult result;
+            try {
+                result = delegate.read(request);
+            } finally {
+                openNanos += System.nanoTime() - started;
+            }
+            return new ReadResult(
+                    request, new TimingBatchCursor(result.cursor(), this), result.report());
+        }
+
+        private void reset() {
+            openNanos = 0;
+            nextNanos = 0;
+        }
+    }
+
+    private static final class TimingBatchCursor implements BatchCursor {
+        private final BatchCursor delegate;
+        private final TimingPhysicalReader timing;
+
+        private TimingBatchCursor(BatchCursor delegate, TimingPhysicalReader timing) {
+            this.delegate = delegate;
+            this.timing = timing;
+        }
+
+        @Override
+        public boolean next() throws IOException {
+            long started = System.nanoTime();
+            try {
+                return delegate.next();
+            } finally {
+                timing.nextNanos += System.nanoTime() - started;
+            }
+        }
+
+        @Override
+        public RecordBatch batch() {
+            return delegate.batch();
+        }
+
+        @Override
+        public void close() throws IOException {
+            delegate.close();
         }
     }
 
@@ -296,6 +374,7 @@ public class IgniteCsrStoreIntegrationTest {
         private long seeks;
         private long reads;
         private long bytes;
+        private long ioNanos;
 
         private CountingStorage(Storage delegate) {
             this.delegate = delegate;
@@ -311,13 +390,24 @@ public class IgniteCsrStoreIntegrationTest {
 
                 @Override
                 public long size() throws IOException {
-                    return delegate.inputFile(uri).size();
+                    long started = System.nanoTime();
+                    try {
+                        return delegate.inputFile(uri).size();
+                    } finally {
+                        ioNanos += System.nanoTime() - started;
+                    }
                 }
 
                 @Override
                 public SeekableInput open() throws IOException {
                     opens++;
-                    SeekableInput input = delegate.inputFile(uri).open();
+                    long started = System.nanoTime();
+                    SeekableInput input;
+                    try {
+                        input = delegate.inputFile(uri).open();
+                    } finally {
+                        ioNanos += System.nanoTime() - started;
+                    }
                     return new SeekableInput() {
                         @Override
                         public long position() throws IOException {
@@ -327,12 +417,23 @@ public class IgniteCsrStoreIntegrationTest {
                         @Override
                         public void seek(long newPosition) throws IOException {
                             seeks++;
-                            input.seek(newPosition);
+                            long started = System.nanoTime();
+                            try {
+                                input.seek(newPosition);
+                            } finally {
+                                ioNanos += System.nanoTime() - started;
+                            }
                         }
 
                         @Override
                         public int read(ByteBuffer destination) throws IOException {
-                            int count = input.read(destination);
+                            long started = System.nanoTime();
+                            int count;
+                            try {
+                                count = input.read(destination);
+                            } finally {
+                                ioNanos += System.nanoTime() - started;
+                            }
                             reads++;
                             if (count > 0) {
                                 bytes += count;
@@ -364,6 +465,7 @@ public class IgniteCsrStoreIntegrationTest {
             seeks = 0;
             reads = 0;
             bytes = 0;
+            ioNanos = 0;
         }
     }
 

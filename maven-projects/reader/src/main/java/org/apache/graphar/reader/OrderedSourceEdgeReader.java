@@ -21,6 +21,9 @@ package org.apache.graphar.reader;
 
 import java.io.IOException;
 import java.net.URI;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import org.apache.graphar.core.ChunkMath;
 import org.apache.graphar.info.EdgeInfo;
@@ -63,6 +66,11 @@ public final class OrderedSourceEdgeReader {
      */
     public NeighborCursor neighbors(long sourceVertexId, long limit) throws IOException {
         return neighborReader.neighbors(sourceVertexId, limit);
+    }
+
+    /** Reads a bounded frontier in physical adjacency-chunk batches. */
+    public Map<Long, List<Long>> neighbors(Collection<Long> sourceVertexIds) throws IOException {
+        return neighborReader.neighbors(sourceVertexIds);
     }
 
     /** Returns the number of source vertices represented by this adjacency layout. */

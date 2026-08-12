@@ -22,8 +22,12 @@ package org.apache.graphar.reader;
 import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import org.apache.graphar.core.EdgeRange;
@@ -78,6 +82,70 @@ public final class OrderedSourceNeighborReader {
         return openNeighbors(sourceVertexId, limit, true);
     }
 
+    /**
+     * Reads several source vertices in physical adjacency-chunk batches.
+     *
+     * <p>Each returned list preserves that source's GraphAr adjacency order. Sources may span
+     * multiple vertex and edge chunks; the reader opens each selected adjacency chunk once and
+     * requests the smallest enclosing physical row range for the sources in that chunk. This is
+     * intended for bounded frontier expansion, where one request per vertex would repeatedly open
+     * the same Parquet file.
+     */
+    public Map<Long, List<Long>> neighbors(Collection<Long> sourceVertexIds) throws IOException {
+        Objects.requireNonNull(sourceVertexIds, "Source vertex IDs cannot be null.");
+        Map<Long, List<Long>> result = new LinkedHashMap<>();
+        Map<URI, ChunkSelection> selections = new LinkedHashMap<>();
+        Map<Long, TreeMap<Long, List<Long>>> pieces = new LinkedHashMap<>();
+        for (Long source : sourceVertexIds) {
+            if (source == null || source < 0) {
+                throw new IllegalArgumentException("Source vertex IDs must be non-negative.");
+            }
+            if (result.containsKey(source)) {
+                continue;
+            }
+            result.put(source, List.of());
+            OffsetLocation location = resolver.locate(source);
+            LoadedOffsetChunk loaded =
+                    loadOffsetChunk(DatasetUris.resolve(datasetRoot, location.offsetChunkUri()));
+            ResolvedAdjacency resolved = resolver.resolve(source, loaded.offsetChunk);
+            for (long chunk = resolved.edgeChunks().begin();
+                    chunk < resolved.edgeChunks().end();
+                    chunk++) {
+                long chunkStart = Math.multiplyExact(chunk, edgeInfo.getChunkSize());
+                long chunkEnd = Math.addExact(chunkStart, edgeInfo.getChunkSize());
+                long start = Math.max(resolved.edgeRange().begin(), chunkStart) - chunkStart;
+                long end = Math.min(resolved.edgeRange().end(), chunkEnd) - chunkStart;
+                if (start == end) {
+                    continue;
+                }
+                URI uri = DatasetUris.resolve(datasetRoot, resolved.adjacencyChunkUri(chunk));
+                selections
+                        .computeIfAbsent(uri, unused -> new ChunkSelection(uri))
+                        .add(source, Math.addExact(chunkStart, start), start, end);
+            }
+        }
+        for (ChunkSelection selection : selections.values()) {
+            List<Long> values = readDestinations(selection);
+            for (VertexRange range : selection.ranges) {
+                int start = Math.toIntExact(range.start - selection.start);
+                int end = Math.toIntExact(range.end - selection.start);
+                pieces.computeIfAbsent(range.source, unused -> new TreeMap<>())
+                        .put(range.globalStart, List.copyOf(values.subList(start, end)));
+            }
+        }
+        for (Map.Entry<Long, List<Long>> entry : result.entrySet()) {
+            List<Long> neighbors = new ArrayList<>();
+            TreeMap<Long, List<Long>> ranges = pieces.get(entry.getKey());
+            if (ranges != null) {
+                for (List<Long> range : ranges.values()) {
+                    neighbors.addAll(range);
+                }
+            }
+            entry.setValue(List.copyOf(neighbors));
+        }
+        return Map.copyOf(result);
+    }
+
     private NeighborCursor openNeighbors(long sourceVertexId, long limit, boolean limited)
             throws IOException {
         OffsetLocation location = resolver.locate(sourceVertexId);
@@ -117,6 +185,37 @@ public final class OrderedSourceNeighborReader {
         }
     }
 
+    private List<Long> readDestinations(ChunkSelection selection) throws IOException {
+        ReadResult result =
+                physicalReader.read(
+                        ReadRequest.builder(selection.uri)
+                                .projection(
+                                        Projection.of(List.of(NeighborCursor.DESTINATION_COLUMN)))
+                                .rowRange(
+                                        new org.apache.graphar.io.RowRange(
+                                                selection.start, selection.end))
+                                .build());
+        List<Long> values = new ArrayList<>();
+        try (BatchCursor cursor = result.cursor()) {
+            while (cursor.next()) {
+                RecordBatch batch = cursor.batch();
+                for (int index = 0; index < batch.rowCount(); index++) {
+                    Object value = batch.row(index).value(0);
+                    if (!(value instanceof Long) || (Long) value < 0) {
+                        throw new IllegalArgumentException(
+                                "GraphAr destination IDs must be non-negative INT64 values.");
+                    }
+                    values.add((Long) value);
+                }
+            }
+        }
+        if (values.size() != selection.end - selection.start) {
+            throw new IllegalArgumentException(
+                    "GraphAr adjacency row range has an unexpected row count: " + selection.uri);
+        }
+        return values;
+    }
+
     private static long[] readOffsets(BatchCursor cursor) throws IOException {
         List<Long> offsets = new ArrayList<>();
         try (BatchCursor closeableCursor = cursor) {
@@ -147,6 +246,37 @@ public final class OrderedSourceNeighborReader {
                 OffsetChunk offsetChunk, org.apache.graphar.io.ReadReport report) {
             this.offsetChunk = offsetChunk;
             this.report = report;
+        }
+    }
+
+    private static final class ChunkSelection {
+        private final URI uri;
+        private final List<VertexRange> ranges = new ArrayList<>();
+        private long start = Long.MAX_VALUE;
+        private long end;
+
+        private ChunkSelection(URI uri) {
+            this.uri = uri;
+        }
+
+        private void add(long source, long globalStart, long rangeStart, long rangeEnd) {
+            ranges.add(new VertexRange(source, globalStart, rangeStart, rangeEnd));
+            start = Math.min(start, rangeStart);
+            end = Math.max(end, rangeEnd);
+        }
+    }
+
+    private static final class VertexRange {
+        private final long source;
+        private final long globalStart;
+        private final long start;
+        private final long end;
+
+        private VertexRange(long source, long globalStart, long start, long end) {
+            this.source = source;
+            this.globalStart = globalStart;
+            this.start = start;
+            this.end = end;
         }
     }
 }
