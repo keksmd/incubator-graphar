@@ -83,6 +83,7 @@
         <module>io-parquet</module>
         <module>storage-local</module>
         <module>core</module>
+        <module>reader</module>
     </modules>
 
     <build>
