@@ -112,6 +112,31 @@ public final class IgniteCsrStore {
         Objects.requireNonNull(reader, "Ordered source reader cannot be null.");
         long vertexCount = reader.vertexCount();
         long edgeCount = reader.edgeCount();
+        try (EdgeCursor cursor = reader.scanEdges()) {
+            return load(snapshotId, vertexCount, edgeCount, new GraphArTopologyCursor(cursor));
+        }
+    }
+
+    /**
+     * Streams an already globally source-sorted immutable topology into versioned CSR shards.
+     *
+     * <p>This method closes the cursor and requires it to represent one immutable source snapshot.
+     * It deliberately does not materialize or sort edges; an out-of-order source or an out-of-range
+     * endpoint is rejected before the snapshot manifest is published.
+     */
+    public LoadResult load(String snapshotId, long vertexCount, TopologyCursor cursor)
+            throws IOException {
+        requireNonBlank(snapshotId, "Snapshot ID");
+        if (vertexCount < 0) {
+            throw new IllegalArgumentException("Vertex count must be non-negative.");
+        }
+        Objects.requireNonNull(cursor, "Topology cursor cannot be null.");
+        return load(snapshotId, vertexCount, -1, cursor);
+    }
+
+    private LoadResult load(
+            String snapshotId, long vertexCount, long expectedEdgeCount, TopologyCursor cursor)
+            throws IOException {
         long shardCount = divideRoundUp(vertexCount, verticesPerShard);
         if (shardCount > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("Too many CSR shards: " + shardCount);
@@ -125,10 +150,14 @@ public final class IgniteCsrStore {
         int shardIndex = 0;
         long previousSource = -1;
         CsrBuilder builder = shardCount == 0 ? null : newBuilder(vertexCount, shardIndex);
-        try (EdgeCursor cursor = reader.scanEdges()) {
-            while (cursor.next()) {
-                long source = cursor.source();
-                if (source < previousSource || source >= vertexCount || builder == null) {
+        try (TopologyCursor sourceCursor = cursor) {
+            while (sourceCursor.next()) {
+                long source = sourceCursor.source();
+                long destination = sourceCursor.destination();
+                if (source < previousSource
+                        || source >= vertexCount
+                        || destination < 0
+                        || builder == null) {
                     throw new IllegalArgumentException(
                             "GraphAr source scan is not sorted and in bounds.");
                 }
@@ -139,7 +168,7 @@ public final class IgniteCsrStore {
                     shardIndex++;
                     builder = newBuilder(vertexCount, shardIndex);
                 }
-                builder.add(source, cursor.destination());
+                builder.add(source, destination);
                 previousSource = source;
             }
         }
@@ -149,19 +178,31 @@ public final class IgniteCsrStore {
             shardIndex++;
             builder = shardIndex == shardCount ? null : newBuilder(vertexCount, shardIndex);
         }
-        if (loadedEdges != edgeCount) {
+        if (expectedEdgeCount >= 0 && loadedEdges != expectedEdgeCount) {
             throw new IllegalArgumentException(
                     "GraphAr edge controls disagree with topology scan: "
-                            + edgeCount
+                            + expectedEdgeCount
                             + " != "
                             + loadedEdges);
         }
-        byte[] manifest = encodeManifest(vertexCount, edgeCount, (int) shardCount);
+        byte[] manifest = encodeManifest(vertexCount, loadedEdges, (int) shardCount);
         if (cache.getAndPutIfAbsent(ShardKey.manifest(snapshotId), manifest) != null) {
             throw new IllegalStateException(
                     "CSR snapshot was concurrently published: " + snapshotId);
         }
         return new LoadResult(snapshotId, vertexCount, loadedEdges, (int) shardCount);
+    }
+
+    /** A closeable, globally source-sorted topology stream used by integration adapters. */
+    public interface TopologyCursor extends AutoCloseable {
+        boolean next() throws IOException;
+
+        long source();
+
+        long destination();
+
+        @Override
+        void close() throws IOException;
     }
 
     /** Executes a neighbor lookup colocated with the shard cache entry's primary owner. */
@@ -577,6 +618,34 @@ public final class IgniteCsrStore {
                 buffer.putLong(destination);
             }
             return buffer.array();
+        }
+    }
+
+    private static final class GraphArTopologyCursor implements TopologyCursor {
+        private final EdgeCursor delegate;
+
+        private GraphArTopologyCursor(EdgeCursor delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public boolean next() throws IOException {
+            return delegate.next();
+        }
+
+        @Override
+        public long source() {
+            return delegate.source();
+        }
+
+        @Override
+        public long destination() {
+            return delegate.destination();
+        }
+
+        @Override
+        public void close() throws IOException {
+            delegate.close();
         }
     }
 
