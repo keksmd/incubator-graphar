@@ -21,6 +21,7 @@ package org.apache.graphar.reader;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.List;
 import org.apache.graphar.info.EdgeInfo;
 
 /** Builds a bounded heap CSR representation from an ordered source topology scan. */
@@ -297,6 +298,69 @@ final class CsrMaterializer {
                 destinations[write++] = buffer[left++];
             }
         }
+    }
+
+    /**
+     * Places entries by reading the topology twice instead of buffering its endpoints.
+     *
+     * <p>The buffered path holds eight bytes per edge for the whole build, which on a graph of
+     * hundreds of millions of edges is a second copy of the projection. This path pays a second
+     * scan of the dataset instead: the first counts degrees, the second places entries. It is the
+     * slower of the two and the only one that can build a graph whose endpoints do not fit
+     * alongside it.
+     */
+    static CsrGraph fromScans(List<EndpointScan> scans, long vertexCount, CsrDirection direction)
+            throws IOException {
+        int vertexArrayLength = Math.toIntExact(Math.addExact(vertexCount, 1));
+        int[] offsets = new int[vertexArrayLength];
+        for (EndpointScan scan : scans) {
+            scan.scan(
+                    (source, target) -> {
+                        if (direction != CsrDirection.OUTGOING) {
+                            offsets[target + 1]++;
+                        }
+                        if (direction != CsrDirection.INCOMING) {
+                            offsets[source + 1]++;
+                        }
+                    });
+        }
+        long entries = 0;
+        for (int vertex = 1; vertex < vertexArrayLength; vertex++) {
+            entries += offsets[vertex];
+        }
+        ProjectionCapacity.requireAddressable(vertexCount, entries);
+        for (int vertex = 1; vertex < vertexArrayLength; vertex++) {
+            offsets[vertex] += offsets[vertex - 1];
+        }
+        int[] destinations = new int[Math.toIntExact(entries)];
+        int[] cursorByVertex = offsets.clone();
+        for (EndpointScan scan : scans) {
+            scan.scan(
+                    (source, target) -> {
+                        if (direction != CsrDirection.OUTGOING) {
+                            destinations[cursorByVertex[target]++] = source;
+                        }
+                        if (direction != CsrDirection.INCOMING) {
+                            destinations[cursorByVertex[source]++] = target;
+                        }
+                    });
+        }
+        for (int vertex = 0; vertex < vertexArrayLength - 1; vertex++) {
+            Arrays.sort(destinations, offsets[vertex], offsets[vertex + 1]);
+        }
+        return new CsrGraph(offsets, destinations);
+    }
+
+    /** One readable pass over a topology, in the global identifier space of the projection. */
+    @FunctionalInterface
+    interface EndpointScan {
+        void scan(EndpointSink sink) throws IOException;
+    }
+
+    /** Receives the endpoints of one edge during an {@link EndpointScan}. */
+    @FunctionalInterface
+    interface EndpointSink {
+        void accept(int source, int target);
     }
 
     private static void validateBound(long value, String kind) {

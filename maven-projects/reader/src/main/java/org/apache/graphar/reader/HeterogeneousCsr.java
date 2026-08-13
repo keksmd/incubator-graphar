@@ -185,8 +185,19 @@ public final class HeterogeneousCsr {
             return this;
         }
 
-        /** Reads every declared type once and materializes the merged projection. */
+        /**
+         * Reads every declared type and materializes the merged projection.
+         *
+         * <p>The topology is read once when its endpoints fit in the heap alongside the projection,
+         * and twice when they do not. Buffering the endpoints is the faster of the two and costs
+         * eight bytes per edge, which on a large graph is a second copy of the projection; a build
+         * that cannot afford that is better served slowly than refused.
+         */
         public HeterogeneousCsr build() throws IOException {
+            return build(availableHeapBytes());
+        }
+
+        HeterogeneousCsr build(long availableBytes) throws IOException {
             if (idPropertyByType.isEmpty()) {
                 throw new IllegalArgumentException("At least one vertex type must be declared.");
             }
@@ -221,7 +232,14 @@ public final class HeterogeneousCsr {
             ProjectionCapacity.requireAddressable(
                     totalVertices, ProjectionCapacity.entryCount(totalEdges, direction));
             ProjectionCapacity.requireHeadroom(
-                    totalVertices, totalEdges, direction, availableHeapBytes());
+                    totalVertices, totalEdges, direction, availableBytes);
+            if (ProjectionCapacity.peakBuildBytes(totalVertices, totalEdges, direction)
+                    > availableBytes) {
+                CsrGraph scanned =
+                        CsrMaterializer.fromScans(
+                                scansOf(readers, types, bases), totalVertices, direction);
+                return new HeterogeneousCsr(types, bases, indexByType, scanned);
+            }
             int storedEdges = Math.toIntExact(totalEdges);
             int[] sources = new int[storedEdges];
             int[] targets = new int[storedEdges];
@@ -253,6 +271,31 @@ public final class HeterogeneousCsr {
                     CsrMaterializer.fromEndpoints(
                             sources, targets, storedEdges, totalVertices, direction);
             return new HeterogeneousCsr(types, bases, indexByType, csr);
+        }
+
+        private List<CsrMaterializer.EndpointScan> scansOf(
+                List<OrderedSourceEdgeReader> readers, String[] types, long[] bases) {
+            List<CsrMaterializer.EndpointScan> scans = new ArrayList<>(readers.size());
+            int position = 0;
+            for (EdgeTriplet triplet : triplets) {
+                final OrderedSourceEdgeReader reader = readers.get(position++);
+                final long sourceBase = bases[indexOf(types, triplet.srcType)];
+                final long targetBase = bases[indexOf(types, triplet.dstType)];
+                scans.add(
+                        sink -> {
+                            try (EdgeCursor cursor = reader.scanEdges()) {
+                                while (cursor.next()) {
+                                    sink.accept(
+                                            Math.toIntExact(
+                                                    Math.addExact(sourceBase, cursor.source())),
+                                            Math.toIntExact(
+                                                    Math.addExact(
+                                                            targetBase, cursor.destination())));
+                                }
+                            }
+                        });
+            }
+            return scans;
         }
 
         private static long availableHeapBytes() {

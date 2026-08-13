@@ -59,14 +59,24 @@ public final class ProjectionCapacity {
     }
 
     /**
-     * Returns the heap a build of this size peaks at, which includes the endpoint buffers a merged
-     * projection fills before placing entries, and the offset cursor the placement copies.
+     * Returns the heap a one-scan build of this size peaks at, which includes the endpoint buffers
+     * a merged projection fills before placing entries, and the offset cursor the placement copies.
      */
     public static long peakBuildBytes(long vertexCount, long edgeCount, CsrDirection direction) {
-        long entries = entryCount(edgeCount, direction);
         long endpoints = Math.multiplyExact(Math.multiplyExact(edgeCount, 2L), BYTES_PER_SLOT);
+        return Math.addExact(twoScanPeakBuildBytes(vertexCount, edgeCount, direction), endpoints);
+    }
+
+    /**
+     * Returns the heap a two-scan build of this size peaks at. Reading the topology a second time
+     * replaces the endpoint buffers, so this is the least heap in which the graph can be built at
+     * all, and it is what {@link #requireHeadroom} holds a caller to.
+     */
+    public static long twoScanPeakBuildBytes(
+            long vertexCount, long edgeCount, CsrDirection direction) {
+        long entries = entryCount(edgeCount, direction);
         long cursor = Math.multiplyExact(Math.addExact(vertexCount, 1L), BYTES_PER_SLOT);
-        return Math.addExact(Math.addExact(heapBytes(vertexCount, entries), endpoints), cursor);
+        return Math.addExact(heapBytes(vertexCount, entries), cursor);
     }
 
     /**
@@ -102,14 +112,14 @@ public final class ProjectionCapacity {
     }
 
     /**
-     * Rejects a build that cannot fit in {@code availableBytes}, naming both numbers, so the caller
-     * fails before allocating instead of during it.
+     * Rejects a build that cannot fit in {@code availableBytes} by any strategy, naming both
+     * numbers, so the caller fails before allocating instead of during it.
      *
-     * @throws ProjectionTooLargeException when the build peak is past the available heap
+     * @throws ProjectionTooLargeException when even a two-scan build is past the available heap
      */
     public static void requireHeadroom(
             long vertexCount, long edgeCount, CsrDirection direction, long availableBytes) {
-        long required = peakBuildBytes(vertexCount, edgeCount, direction);
+        long required = twoScanPeakBuildBytes(vertexCount, edgeCount, direction);
         if (required > availableBytes) {
             throw new ProjectionTooLargeException(
                     "Projection of "
