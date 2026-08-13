@@ -143,7 +143,9 @@ public final class ParquetPhysicalReader implements PhysicalReader {
             ParquetMetadata footer = remembered;
             if (footer == null) {
                 footer = ParquetFileReader.readFooter(file, options, stream);
-                footers.put(uri, size, footer);
+                if (isPlaintext(footer)) {
+                    footers.put(uri, size, footer);
+                }
             }
             ParquetFileReader reader = ParquetFileReader.open(file, footer, options, stream);
             stream = null;
@@ -153,6 +155,14 @@ public final class ParquetPhysicalReader implements PhysicalReader {
                 stream.close();
             }
         }
+    }
+
+    /**
+     * Returns whether a footer is safe to remember. An encrypted file carries a stateful decryptor
+     * inside its metadata, so its footer is parsed again for every reader.
+     */
+    private static boolean isPlaintext(ParquetMetadata footer) {
+        return footer.getFileMetaData().getFileDecryptor() == null;
     }
 
     private static List<ParquetColumn> columns(MessageType fileSchema) {
