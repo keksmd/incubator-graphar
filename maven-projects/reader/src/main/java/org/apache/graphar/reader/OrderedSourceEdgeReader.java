@@ -104,9 +104,20 @@ public final class OrderedSourceEdgeReader {
         return openEdgeScan(limit, true);
     }
 
-    /** Materializes this ordered topology as a bounded heap CSR representation. */
+    /** Materializes the outgoing adjacency of this topology as a bounded heap CSR. */
     public CsrGraph materializeCsr(long maxVertices, long maxEdges) throws IOException {
-        return CsrMaterializer.materialize(this, maxVertices, maxEdges);
+        return materializeCsr(maxVertices, maxEdges, CsrDirection.OUTGOING);
+    }
+
+    /**
+     * Materializes the requested adjacency of this topology as a bounded heap CSR. Reversing
+     * directions transpose the stored edges in memory instead of requiring a second {@code
+     * ordered_by_dest} projection on disk.
+     */
+    public CsrGraph materializeCsr(long maxVertices, long maxEdges, CsrDirection direction)
+            throws IOException {
+        Objects.requireNonNull(direction, "CSR direction cannot be null.");
+        return CsrMaterializer.materialize(this, edgeInfo, maxVertices, maxEdges, direction);
     }
 
     private EdgeCursor openEdgeScan(long limit, boolean limited) throws IOException {
