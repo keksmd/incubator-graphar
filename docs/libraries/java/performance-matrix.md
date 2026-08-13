@@ -13,14 +13,35 @@ outside the timed region.
 
 | Runtime and API | Timed scans | Measured time | Throughput |
 | --- | ---: | ---: | ---: |
-| Java `OrderedSourceEdgeReader.scanEdges()` | 10 | 55.880 ms/scan | 118,576 rows/s |
+| Java `OrderedSourceEdgeReader.scanEdges()` | 10 | 32.926 ms/scan | 201,239 rows/s |
 | C++ `AdjListArrowChunkReader` | Google Benchmark median of 5 repetitions | 2.480 ms/scan | 2,671,774 rows/s |
 | Spark `EdgeReader.readAllAdjList(false).count()` | 10 | 131.687 ms/scan | 50,316 rows/s |
+
+The Java row was re-measured on 2026-08-13 with the Parquet footer cache enabled; the C++ and Spark
+rows are the 2026-08-12 measurements and were not re-run. Java is roughly 13× slower than C++ here,
+but treat the exact ratio as indicative until all three rows are measured in one session.
 
 This is an API-level latency comparison, not a claim that the runtimes issue the same number of
 filesystem reads: Java currently exposes exact storage counters, while the public C++ Arrow reader
 and Spark `EdgeReader` do not. The shared payload is explicit above; each runtime additionally
 performs its own Parquet footer/control-file work. Do not compare Spark startup to the other rows.
+
+### Parquet footer cache
+
+`ParquetPhysicalReader` remembers the parsed footer of each file it has read, keyed by URI and
+validated against the file size, so repeated reads of one immutable GraphAr chunk parse the footer
+once. `TopologyScanBenchmarkTest` interleaves cache-off and cache-on rounds in one JVM so that JIT
+warm-up cannot be mistaken for the effect. The first round is discarded as warm-up.
+
+| Round | Cache off | Cache on |
+| --- | ---: | ---: |
+| 2 | 37.949 ms/scan | 34.494 ms/scan |
+| 3 | 37.806 ms/scan | 31.358 ms/scan |
+| Mean | 37.878 ms/scan | 32.926 ms/scan |
+
+The cache removes 13.1% of scan time. Footer parsing is therefore a real but minor part of the
+remaining gap to C++: per-request `ParquetFileReader` construction and page decode dominate.
+Construct the reader with `new ParquetPhysicalReader(storage, 0)` to disable the cache.
 
 Run Java:
 
@@ -84,20 +105,27 @@ is a reproducible implementation comparison, not a cross-host latency or capacit
 
 | Metric | Indexed GraphAr Parquet | Ignite CSR |
 | --- | ---: | ---: |
-| 12 traversals, total | 960.356 ms | 129.906 ms |
-| Average per traversal | 80.030 ms | 10.826 ms |
-| Relative latency | 7.39× slower | 7.39× faster |
+| 12 traversals, total | 840.433 ms | 115.561 ms |
+| Average per traversal | 70.036 ms | 9.630 ms |
+| Relative latency | 7.27× slower | 7.27× faster |
 | Query I/O opens | 262 | off-heap memory |
-| Query I/O seeks | 1,026 | off-heap memory |
-| Query I/O reads | 4,714 | off-heap memory |
-| Query input bytes | 935,820 B | off-heap memory |
-| Local storage I/O time | 28.908 ms | n/a |
-| Java `PhysicalReader.read()` time | 846.682 ms | n/a |
-| Java cursor `next()` time | 76.380 ms | n/a |
+| Query I/O seeks | 522 | off-heap memory |
+| Query I/O reads | 3,202 | off-heap memory |
+| Query input bytes | 824,340 B | off-heap memory |
+| Local storage I/O time | 21.281 ms | n/a |
+| Java `PhysicalReader.read()` time | 733.710 ms | n/a |
+| Java cursor `next()` time | 72.312 ms | n/a |
 | Affinity jobs per hop | n/a | `[1, 7, 8]` |
 
 The comparison identifies reader creation/page decode as the remaining Parquet cost: `PhysicalReader.read()`
-accounts for 846.682 ms of the 960.356 ms total, while local file I/O accounts for 28.908 ms.
+accounts for 733.710 ms of the 840.433 ms total, while local file I/O accounts for 21.281 ms.
+
+The footer cache measurably reduces this workload, which re-reads the same eleven adjacency chunks
+across hops: against the 2026-08-12 run without it, seeks fell from 1,026 to 522, reads from 4,714
+to 3,202, and input bytes from 935,820 B to 824,340 B, while `PhysicalReader.read()` fell from
+846.682 ms to 733.710 ms. Open count is unchanged at 262 because each request still opens its own
+stream. Closing the rest of the gap requires reusing decoded column data across requests, not
+further footer work; that is not implemented.
 
 Run:
 
@@ -109,5 +137,6 @@ mvn --offline --no-transfer-progress -pl integration-ignite -am \
   -Dspotless.check.skip=true
 ```
 
-Measured on 2026-08-12 on the local development machine. Re-run before using the elapsed-time
+Java rows re-measured on 2026-08-13 on the local development machine; C++ and Spark rows are from
+2026-08-12 on the same machine. Re-run before using the elapsed-time
 numbers for a release comparison; the workload and I/O counters are the regression contract.

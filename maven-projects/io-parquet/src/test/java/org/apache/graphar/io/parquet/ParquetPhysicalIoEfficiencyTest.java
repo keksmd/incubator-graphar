@@ -122,6 +122,63 @@ public class ParquetPhysicalIoEfficiencyTest {
         }
     }
 
+    @Test
+    public void reusesARememberedFooterAcrossRepeatedReadsOfOneFile() throws Exception {
+        Path directory = Files.createTempDirectory("graphar-parquet-footer-cache-");
+        Path file = directory.resolve("topology.parquet");
+        CountingStorage storage = new CountingStorage(new LocalStorage());
+        URI uri = file.toUri();
+        try {
+            new ParquetPhysicalWriter(storage)
+                    .write(
+                            new WriteRequest(uri, SCHEMA, WriteMode.CREATE_NEW),
+                            new GeneratedBatches(ROW_COUNT, BATCH_ROWS));
+
+            ParquetPhysicalReader uncached = new ParquetPhysicalReader(storage, 0);
+            assertEquals(RANGE_ROWS, readRange(uncached, uri));
+            storage.resetInputCounters();
+            assertEquals(RANGE_ROWS, readRange(uncached, uri));
+            Counters repeatedWithoutCache = storage.inputCounters();
+
+            ParquetPhysicalReader cached = new ParquetPhysicalReader(storage);
+            assertEquals(RANGE_ROWS, readRange(cached, uri));
+            storage.resetInputCounters();
+            assertEquals(RANGE_ROWS, readRange(cached, uri));
+            Counters repeatedWithCache = storage.inputCounters();
+
+            System.out.println(
+                    "PARQUET_FOOTER_CACHE repeat_bytes_uncached="
+                            + repeatedWithoutCache.bytes
+                            + " repeat_calls_uncached="
+                            + repeatedWithoutCache.calls
+                            + " repeat_bytes_cached="
+                            + repeatedWithCache.bytes
+                            + " repeat_calls_cached="
+                            + repeatedWithCache.calls);
+            assertTrue(
+                    "A remembered footer must remove read work from the repeated read: "
+                            + repeatedWithCache.bytes
+                            + " of "
+                            + repeatedWithoutCache.bytes,
+                    repeatedWithCache.bytes < repeatedWithoutCache.bytes);
+            assertTrue(
+                    "A remembered footer must not add stream opens.",
+                    repeatedWithCache.opens == repeatedWithoutCache.opens);
+        } finally {
+            Files.deleteIfExists(file);
+            Files.deleteIfExists(directory);
+        }
+    }
+
+    private static long readRange(ParquetPhysicalReader reader, URI uri) throws IOException {
+        return assertPayloads(
+                reader.read(
+                        ReadRequest.builder(uri)
+                                .projection(Projection.of(List.of("payload")))
+                                .rowRange(new RowRange(RANGE_START, RANGE_START + RANGE_ROWS))
+                                .build()));
+    }
+
     private static long assertPayloads(ReadResult result) throws IOException {
         long rows = 0;
         try (BatchCursor cursor = result.cursor()) {

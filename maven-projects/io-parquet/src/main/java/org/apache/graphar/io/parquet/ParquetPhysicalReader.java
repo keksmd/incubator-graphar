@@ -20,6 +20,7 @@
 package org.apache.graphar.io.parquet;
 
 import java.io.IOException;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -39,7 +40,10 @@ import org.apache.graphar.io.ReadResult;
 import org.apache.graphar.io.Schema;
 import org.apache.graphar.storage.InputFile;
 import org.apache.graphar.storage.Storage;
+import org.apache.parquet.ParquetReadOptions;
 import org.apache.parquet.hadoop.ParquetFileReader;
+import org.apache.parquet.hadoop.metadata.ParquetMetadata;
+import org.apache.parquet.io.SeekableInputStream;
 import org.apache.parquet.schema.LogicalTypeAnnotation;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.PrimitiveType;
@@ -54,11 +58,30 @@ public final class ParquetPhysicalReader implements PhysicalReader {
                             ReadCapability.ROW_RANGE,
                             ReadCapability.LIMIT));
 
-    private final Storage storage;
+    private static final int DEFAULT_FOOTER_CACHE_CAPACITY = 256;
 
-    /** Creates a reader that resolves each request URI through {@code storage}. */
+    private final Storage storage;
+    private final FooterCache footers;
+
+    /**
+     * Creates a reader that resolves each request URI through {@code storage} and remembers the
+     * footers of recently read files.
+     */
     public ParquetPhysicalReader(Storage storage) {
+        this(storage, DEFAULT_FOOTER_CACHE_CAPACITY);
+    }
+
+    /**
+     * Creates a reader that keeps at most {@code footerCacheCapacity} Parquet footers in memory.
+     * GraphAr chunk files are immutable once published, so repeated range reads of one chunk parse
+     * its footer once. A capacity of zero parses the footer on every request.
+     *
+     * @param storage resolves each request URI to a readable file
+     * @param footerCacheCapacity maximum number of remembered footers
+     */
+    public ParquetPhysicalReader(Storage storage, int footerCacheCapacity) {
         this.storage = Objects.requireNonNull(storage, "storage");
+        this.footers = new FooterCache(footerCacheCapacity);
     }
 
     @Override
@@ -77,7 +100,7 @@ public final class ParquetPhysicalReader implements PhysicalReader {
                 Objects.requireNonNull(storage.inputFile(request.uri()), "storage inputFile");
         ParquetFileReader fileReader = null;
         try {
-            fileReader = ParquetFileReader.open(new ParquetInputFile(inputFile));
+            fileReader = open(request.uri(), new ParquetInputFile(inputFile));
             MessageType fileSchema = fileReader.getFooter().getFileMetaData().getSchema();
             List<ParquetColumn> fileColumns = columns(fileSchema);
             Map<String, ParquetColumn> columnsByName = byName(fileColumns);
@@ -103,6 +126,31 @@ public final class ParquetPhysicalReader implements PhysicalReader {
         } finally {
             if (fileReader != null) {
                 fileReader.close();
+            }
+        }
+    }
+
+    /**
+     * Opens a Parquet reader, reusing a remembered footer when the file is unchanged in size. The
+     * returned reader owns the stream opened here and closes it.
+     */
+    private ParquetFileReader open(URI uri, ParquetInputFile file) throws IOException {
+        ParquetReadOptions options = ParquetReadOptions.builder().build();
+        long size = file.getLength();
+        ParquetMetadata remembered = footers.get(uri, size);
+        SeekableInputStream stream = file.newStream();
+        try {
+            ParquetMetadata footer = remembered;
+            if (footer == null) {
+                footer = ParquetFileReader.readFooter(file, options, stream);
+                footers.put(uri, size, footer);
+            }
+            ParquetFileReader reader = ParquetFileReader.open(file, footer, options, stream);
+            stream = null;
+            return reader;
+        } finally {
+            if (stream != null) {
+                stream.close();
             }
         }
     }
@@ -311,5 +359,57 @@ public final class ParquetPhysicalReader implements PhysicalReader {
     private static IllegalArgumentException unsupported(PrimitiveType type, String reason) {
         return new IllegalArgumentException(
                 "Unsupported Parquet column " + type.getName() + ": " + reason);
+    }
+
+    /**
+     * A bounded least-recently-used cache of Parquet footers. A remembered footer is only reused
+     * when the file still reports the size it had when the footer was parsed.
+     */
+    private static final class FooterCache {
+        private final int capacity;
+        private final LinkedHashMap<URI, Entry> entries;
+
+        private FooterCache(int capacity) {
+            if (capacity < 0) {
+                throw new IllegalArgumentException(
+                        "Parquet footer cache capacity cannot be negative: " + capacity);
+            }
+            this.capacity = capacity;
+            this.entries =
+                    new LinkedHashMap<>(16, 0.75f, true) {
+                        @Override
+                        protected boolean removeEldestEntry(Map.Entry<URI, Entry> eldest) {
+                            return size() > FooterCache.this.capacity;
+                        }
+                    };
+        }
+
+        private synchronized ParquetMetadata get(URI uri, long size) {
+            if (capacity == 0) {
+                return null;
+            }
+            Entry entry = entries.get(uri);
+            if (entry == null || entry.size != size) {
+                return null;
+            }
+            return entry.footer;
+        }
+
+        private synchronized void put(URI uri, long size, ParquetMetadata footer) {
+            if (capacity == 0) {
+                return;
+            }
+            entries.put(uri, new Entry(size, footer));
+        }
+
+        private static final class Entry {
+            private final long size;
+            private final ParquetMetadata footer;
+
+            private Entry(long size, ParquetMetadata footer) {
+                this.size = size;
+                this.footer = footer;
+            }
+        }
     }
 }
