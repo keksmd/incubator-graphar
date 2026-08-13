@@ -19,11 +19,16 @@
 
 package org.apache.graphar.reader;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
+import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Random;
+import org.apache.graphar.storage.local.LocalStorage;
 import org.junit.Test;
 
 /**
@@ -195,6 +200,66 @@ public class CsrScaleIT {
                 assertTrue("adjacency must stay ordered", neighbor >= previous);
                 previous = neighbor;
             }
+        }
+    }
+
+    @Test
+    public void loadsAStoredProjectionFasterThanItRebuildsOne() throws Exception {
+        long vertexCount = size("GRAPHAR_SCALE_VERTICES", DEFAULT_VERTICES);
+        long edgeCount = size("GRAPHAR_SCALE_EDGES", DEFAULT_EDGES);
+        int edges = Math.toIntExact(edgeCount);
+
+        int[] sources = new int[edges];
+        int[] targets = new int[edges];
+        Random random = new Random(SEED);
+        for (int edge = 0; edge < edges; edge++) {
+            sources[edge] = (int) Math.floorMod(random.nextLong(), vertexCount);
+            targets[edge] = (int) Math.floorMod(random.nextLong(), vertexCount);
+        }
+
+        long buildStart = System.nanoTime();
+        CsrGraph built =
+                CsrMaterializer.fromEndpoints(
+                        sources, targets, edges, vertexCount, CsrDirection.UNDIRECTED);
+        long buildMillis = (System.nanoTime() - buildStart) / 1_000_000L;
+        sources = null;
+        targets = null;
+
+        LocalStorage storage = new LocalStorage();
+        Path file = Files.createTempFile("graphar-scale-", ".csr");
+        try {
+            URI target = file.toUri();
+            long writeStart = System.nanoTime();
+            CsrSnapshot.write(built, storage.outputFile(target));
+            long writeMillis = (System.nanoTime() - writeStart) / 1_000_000L;
+
+            long[] expectedOffsets = built.offsets();
+            long expectedEntries = built.edgeCount();
+            built = null;
+
+            long readStart = System.nanoTime();
+            CsrGraph loaded = CsrSnapshot.read(storage.inputFile(target));
+            long readMillis = (System.nanoTime() - readStart) / 1_000_000L;
+
+            System.out.println(
+                    "snapshot: vertices="
+                            + vertexCount
+                            + " edges="
+                            + edgeCount
+                            + " buildMillis="
+                            + buildMillis
+                            + " writeMillis="
+                            + writeMillis
+                            + " readMillis="
+                            + readMillis
+                            + " snapshotBytes="
+                            + Files.size(file));
+
+            assertEquals(vertexCount, loaded.vertexCount());
+            assertEquals(expectedEntries, loaded.edgeCount());
+            assertArrayEquals(expectedOffsets, loaded.offsets());
+        } finally {
+            Files.deleteIfExists(file);
         }
     }
 
