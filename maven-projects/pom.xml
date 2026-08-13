@@ -103,4 +103,55 @@
             </plugins>
         </pluginManagement>
     </build>
+
+    <profiles>
+        <profile>
+            <id>internal-nexus</id>
+            <properties>
+                <internal.nexus.releases.id>nexus-maven-releases</internal.nexus.releases.id>
+                <internal.nexus.snapshots.id>nexus-maven-snapshots</internal.nexus.snapshots.id>
+                <flatten-maven-plugin.version>1.6.0</flatten-maven-plugin.version>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>flatten-maven-plugin</artifactId>
+                        <version>${flatten-maven-plugin.version}</version>
+                        <configuration>
+                            <updatePomFile>true</updatePomFile>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>flatten</id>
+                                <phase>process-resources</phase>
+                                <goals>
+                                    <goal>flatten</goal>
+                                </goals>
+                            </execution>
+                            <execution>
+                                <id>flatten-clean</id>
+                                <phase>clean</phase>
+                                <goals>
+                                    <goal>clean</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+            <distributionManagement>
+                <repository>
+                    <id>${internal.nexus.releases.id}</id>
+                    <name>Internal releases</name>
+                    <url>${internal.nexus.releases.url}</url>
+                </repository>
+                <snapshotRepository>
+                    <id>${internal.nexus.snapshots.id}</id>
+                    <name>Internal snapshots</name>
+                    <url>${internal.nexus.snapshots.url}</url>
+                </snapshotRepository>
+            </distributionManagement>
+        </profile>
+    </profiles>
 </project>
