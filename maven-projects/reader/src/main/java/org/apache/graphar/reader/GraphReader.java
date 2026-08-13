@@ -64,6 +64,12 @@ public final class GraphReader {
         return graphInfo;
     }
 
+    /** Opens a reader for the supplied GraphAr vertex type. */
+    public VertexReader vertex(String vertexType) {
+        return new VertexReader(
+                graphInfo.getVertexInfo(vertexType), datasetRoot, storage, physicalReader);
+    }
+
     /** Opens an ordered-by-source reader for the supplied GraphAr edge triplet. */
     public OrderedSourceEdgeReader edge(String srcType, String edgeType, String dstType) {
         return new OrderedSourceEdgeReader(
