@@ -47,13 +47,19 @@ public final class HeterogeneousCsr {
     private final long[] bases;
     private final Map<String, VertexIdIndex> indexByType;
     private final CsrGraph csr;
+    private final CsrDirection direction;
 
     private HeterogeneousCsr(
-            String[] types, long[] bases, Map<String, VertexIdIndex> indexByType, CsrGraph csr) {
+            String[] types,
+            long[] bases,
+            Map<String, VertexIdIndex> indexByType,
+            CsrGraph csr,
+            CsrDirection direction) {
         this.types = types;
         this.bases = bases;
         this.indexByType = indexByType;
         this.csr = csr;
+        this.direction = direction;
     }
 
     /** Starts a declaration of the vertex and edge types to merge. */
@@ -64,6 +70,49 @@ public final class HeterogeneousCsr {
     /** Returns the merged topology in global identifier space. */
     public CsrGraph csr() {
         return csr;
+    }
+
+    /** Returns the direction the merged adjacency was materialized in. */
+    public CsrDirection direction() {
+        return direction;
+    }
+
+    /**
+     * Returns a projection carrying the edges of this one and {@code edgeCount} more, without
+     * reading the dataset again.
+     *
+     * <p>GraphAr chunks are immutable, so a dataset under continuous ingest grows by edges that
+     * were not there when this projection was built. Rebuilding derives the unchanged part again;
+     * this merges the arriving edges into the adjacency that already holds it. The endpoints are
+     * global identifiers of this projection, which is what {@link #globalIndex} returns, and the
+     * vertex space is unchanged: a batch that introduces new vertices needs an identifier index
+     * that knows them, so it is a rebuild rather than a merge.
+     *
+     * <p>The returned projection shares the identifier index of this one and leaves this one
+     * untouched, so a caller can publish it while requests are still being answered from here.
+     */
+    public HeterogeneousCsr merge(long[] sources, long[] targets, int edgeCount) {
+        Objects.requireNonNull(sources, "Merged sources cannot be null.");
+        Objects.requireNonNull(targets, "Merged targets cannot be null.");
+        if (edgeCount < 0 || edgeCount > sources.length || edgeCount > targets.length) {
+            throw new IllegalArgumentException(
+                    "Merged edge count is outside the endpoints supplied: " + edgeCount);
+        }
+        int[] narrowedSources = new int[edgeCount];
+        int[] narrowedTargets = new int[edgeCount];
+        for (int edge = 0; edge < edgeCount; edge++) {
+            narrowedSources[edge] = Math.toIntExact(sources[edge]);
+            narrowedTargets[edge] = Math.toIntExact(targets[edge]);
+        }
+        CsrGraph merged =
+                CsrMaterializer.merge(
+                        csr,
+                        narrowedSources,
+                        narrowedTargets,
+                        edgeCount,
+                        csr.vertexCount(),
+                        direction);
+        return new HeterogeneousCsr(types, bases, indexByType, merged, direction);
     }
 
     /** Returns the number of vertices across every declared vertex type. */
@@ -238,7 +287,7 @@ public final class HeterogeneousCsr {
                 CsrGraph scanned =
                         CsrMaterializer.fromScans(
                                 scansOf(readers, types, bases), totalVertices, direction);
-                return new HeterogeneousCsr(types, bases, indexByType, scanned);
+                return new HeterogeneousCsr(types, bases, indexByType, scanned, direction);
             }
             int storedEdges = Math.toIntExact(totalEdges);
             int[] sources = new int[storedEdges];
@@ -270,7 +319,7 @@ public final class HeterogeneousCsr {
             CsrGraph csr =
                     CsrMaterializer.fromEndpoints(
                             sources, targets, storedEdges, totalVertices, direction);
-            return new HeterogeneousCsr(types, bases, indexByType, csr);
+            return new HeterogeneousCsr(types, bases, indexByType, csr, direction);
         }
 
         private List<CsrMaterializer.EndpointScan> scansOf(

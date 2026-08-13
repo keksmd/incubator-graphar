@@ -104,6 +104,33 @@ public final class GraphProjection {
         }
     }
 
+    /**
+     * Publishes a projection the caller derived, returning the published snapshot.
+     *
+     * <p>A dataset under continuous ingest grows by edges that a full rebuild would derive the
+     * unchanged part of again. {@link HeterogeneousCsr#merge} produces the extended projection
+     * without reading the dataset; this makes it the served one under the same rule a rebuild
+     * follows, so readers holding the previous snapshot keep answering from it.
+     *
+     * @throws IllegalStateException when a rebuild is in flight, because publishing over it would
+     *     decide the order of two projections by which one finished first
+     */
+    public Snapshot publish(HeterogeneousCsr projection) {
+        Objects.requireNonNull(projection, "Published projection cannot be null.");
+        if (!refreshing.compareAndSet(false, true)) {
+            throw new IllegalStateException(
+                    "A rebuild is in flight; publish a derived projection outside one.");
+        }
+        try {
+            Snapshot published =
+                    new Snapshot(projection, clock.instant(), snapshot.get().generation() + 1L);
+            snapshot.set(published);
+            return published;
+        } finally {
+            refreshing.set(false);
+        }
+    }
+
     /** Refreshes only when the served snapshot is older than {@code maxAge}. */
     public Snapshot refreshIfStale(Duration maxAge) throws IOException {
         return isStale(maxAge) ? refresh() : snapshot.get();

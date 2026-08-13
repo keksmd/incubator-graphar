@@ -22,6 +22,7 @@ package org.apache.graphar.reader;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import org.apache.graphar.info.EdgeInfo;
 
 /** Builds a bounded heap CSR representation from an ordered source topology scan. */
@@ -142,6 +143,115 @@ final class CsrMaterializer {
                     "Topology rows do not match GraphAr edge_count control files.");
         }
         return fromEndpoints(sources, targets, storedEdges, vertexCount, direction);
+    }
+
+    /**
+     * Merges a batch of new edges into an existing projection, without reading the topology the
+     * projection was built from.
+     *
+     * <p>A rebuild reads every chunk of the dataset and derives every adjacency again, which is the
+     * wrong shape for a dataset that only ever grows: the answer for the part that did not change
+     * is already materialized, and it is already sorted. This merges instead. The new edges are
+     * placed by counting sort, each new run is sorted on its own, and the result of every vertex is
+     * one linear merge of its existing adjacency with the entries that arrived for it. Nothing that
+     * was already ordered is ordered again.
+     *
+     * <p>{@code vertexCount} may exceed the vertex count of {@code base}, which is how vertices
+     * appended to the dataset enter the projection. It cannot be smaller: a projection this class
+     * produces is a superset of the one it started from.
+     *
+     * @throws IllegalArgumentException when the batch names a vertex outside {@code vertexCount},
+     *     or {@code vertexCount} is smaller than the vertex count of {@code base}
+     */
+    static CsrGraph merge(
+            CsrGraph base,
+            int[] sources,
+            int[] targets,
+            int edgeCount,
+            long vertexCount,
+            CsrDirection direction) {
+        Objects.requireNonNull(base, "Base projection cannot be null.");
+        Objects.requireNonNull(direction, "CSR direction cannot be null.");
+        long baseVertexCount = base.vertexCount();
+        if (vertexCount < baseVertexCount) {
+            throw new IllegalArgumentException(
+                    "A merged projection cannot lose vertices: base has "
+                            + baseVertexCount
+                            + ", merge was asked for "
+                            + vertexCount
+                            + ".");
+        }
+        int vertexArrayLength = Math.toIntExact(Math.addExact(vertexCount, 1));
+        int[] addedOffsets = new int[vertexArrayLength];
+        for (int edge = 0; edge < edgeCount; edge++) {
+            int source = requireInGraph(sources[edge], vertexCount);
+            int target = requireInGraph(targets[edge], vertexCount);
+            if (direction != CsrDirection.OUTGOING) {
+                addedOffsets[target + 1]++;
+            }
+            if (direction != CsrDirection.INCOMING) {
+                addedOffsets[source + 1]++;
+            }
+        }
+        for (int vertex = 1; vertex < vertexArrayLength; vertex++) {
+            addedOffsets[vertex] += addedOffsets[vertex - 1];
+        }
+        int addedCount = addedOffsets[vertexArrayLength - 1];
+        long entries = Math.addExact(base.edgeCount(), addedCount);
+        ProjectionCapacity.requireAddressable(vertexCount, entries);
+
+        int[] added = new int[addedCount];
+        int[] cursorByVertex = addedOffsets.clone();
+        for (int edge = 0; edge < edgeCount; edge++) {
+            if (direction != CsrDirection.OUTGOING) {
+                added[cursorByVertex[targets[edge]]++] = sources[edge];
+            }
+            if (direction != CsrDirection.INCOMING) {
+                added[cursorByVertex[sources[edge]]++] = targets[edge];
+            }
+        }
+        for (int vertex = 0; vertex < vertexArrayLength - 1; vertex++) {
+            Arrays.sort(added, addedOffsets[vertex], addedOffsets[vertex + 1]);
+        }
+
+        int[] baseOffsets = base.rawOffsets();
+        int[] baseDestinations = base.rawDestinations();
+        int[] offsets = new int[vertexArrayLength];
+        int[] destinations = new int[Math.toIntExact(entries)];
+        int written = 0;
+        for (int vertex = 0; vertex < vertexArrayLength - 1; vertex++) {
+            offsets[vertex] = written;
+            int existing = vertex < baseVertexCount ? baseOffsets[vertex] : 0;
+            int existingEnd = vertex < baseVertexCount ? baseOffsets[vertex + 1] : 0;
+            int arrived = addedOffsets[vertex];
+            int arrivedEnd = addedOffsets[vertex + 1];
+            while (existing < existingEnd && arrived < arrivedEnd) {
+                destinations[written++] =
+                        baseDestinations[existing] <= added[arrived]
+                                ? baseDestinations[existing++]
+                                : added[arrived++];
+            }
+            while (existing < existingEnd) {
+                destinations[written++] = baseDestinations[existing++];
+            }
+            while (arrived < arrivedEnd) {
+                destinations[written++] = added[arrived++];
+            }
+        }
+        offsets[vertexArrayLength - 1] = written;
+        return new CsrGraph(offsets, destinations);
+    }
+
+    private static int requireInGraph(int vertex, long vertexCount) {
+        if (vertex < 0 || vertex >= vertexCount) {
+            throw new IllegalArgumentException(
+                    "Merged edge names vertex "
+                            + vertex
+                            + ", which is outside the "
+                            + vertexCount
+                            + " vertices of the projection.");
+        }
+        return vertex;
     }
 
     /**

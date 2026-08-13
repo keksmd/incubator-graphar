@@ -47,6 +47,7 @@ public class CsrScaleIT {
     private static final int MAX_DEPTH = 4;
     private static final int MAX_NODES = 50;
     private static final long RESPONSE_BUDGET_MILLIS = 3_000L;
+    private static final long DEFAULT_DELTA_EDGES = 1_000_000L;
     private static final long SEED = 20260813L;
 
     @Test
@@ -261,6 +262,72 @@ public class CsrScaleIT {
         } finally {
             Files.deleteIfExists(file);
         }
+    }
+
+    @Test
+    public void mergesADeltaFasterThanItRebuildsTheWholeProjection() throws Exception {
+        long vertexCount = size("GRAPHAR_SCALE_VERTICES", DEFAULT_VERTICES);
+        long edgeCount = size("GRAPHAR_SCALE_EDGES", DEFAULT_EDGES);
+        int edges = Math.toIntExact(edgeCount);
+        int deltaEdges = Math.toIntExact(size("GRAPHAR_SCALE_DELTA_EDGES", DEFAULT_DELTA_EDGES));
+
+        int[] sources = new int[edges];
+        int[] targets = new int[edges];
+        Random random = new Random(SEED);
+        for (int edge = 0; edge < edges; edge++) {
+            sources[edge] = (int) Math.floorMod(random.nextLong(), vertexCount);
+            targets[edge] = (int) Math.floorMod(random.nextLong(), vertexCount);
+        }
+        int[] deltaSources = new int[deltaEdges];
+        int[] deltaTargets = new int[deltaEdges];
+        for (int edge = 0; edge < deltaEdges; edge++) {
+            deltaSources[edge] = (int) Math.floorMod(random.nextLong(), vertexCount);
+            deltaTargets[edge] = (int) Math.floorMod(random.nextLong(), vertexCount);
+        }
+
+        CsrGraph base =
+                CsrMaterializer.fromEndpoints(
+                        sources, targets, edges, vertexCount, CsrDirection.UNDIRECTED);
+
+        long mergeStart = System.nanoTime();
+        CsrGraph merged =
+                CsrMaterializer.merge(
+                        base,
+                        deltaSources,
+                        deltaTargets,
+                        deltaEdges,
+                        vertexCount,
+                        CsrDirection.UNDIRECTED);
+        long mergeMillis = (System.nanoTime() - mergeStart) / 1_000_000L;
+        assertEquals(base.edgeCount() + deltaEdges * 2L, merged.edgeCount());
+        merged = null;
+        base = null;
+
+        System.arraycopy(deltaSources, 0, sources = grow(sources, deltaEdges), edges, deltaEdges);
+        System.arraycopy(deltaTargets, 0, targets = grow(targets, deltaEdges), edges, deltaEdges);
+        long rebuildStart = System.nanoTime();
+        CsrGraph rebuilt =
+                CsrMaterializer.fromEndpoints(
+                        sources, targets, edges + deltaEdges, vertexCount, CsrDirection.UNDIRECTED);
+        long rebuildMillis = (System.nanoTime() - rebuildStart) / 1_000_000L;
+
+        System.out.println(
+                "delta: vertices="
+                        + vertexCount
+                        + " edges="
+                        + edgeCount
+                        + " deltaEdges="
+                        + deltaEdges
+                        + " mergeMillis="
+                        + mergeMillis
+                        + " rebuildMillis="
+                        + rebuildMillis);
+
+        assertEquals((edgeCount + deltaEdges) * 2L, rebuilt.edgeCount());
+    }
+
+    private static int[] grow(int[] values, int extra) {
+        return Arrays.copyOf(values, values.length + extra);
     }
 
     private static long size(String variable, long fallback) {
