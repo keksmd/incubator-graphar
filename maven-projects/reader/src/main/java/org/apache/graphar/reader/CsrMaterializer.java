@@ -147,6 +147,15 @@ final class CsrMaterializer {
      * Places buffered endpoint pairs into a CSR by counting sort. Callers that merge several
      * topologies into one identifier space reach this directly, because their edges no longer
      * arrive sorted by source and cannot use the streaming path.
+     *
+     * <p>GraphAr stores topology {@code ordered_by_source}, so the endpoints a real dataset
+     * produces arrive sorted even here. That is not a convenience, it is the difference between two
+     * placement strategies: on sorted input the outgoing entries of a vertex form one contiguous
+     * run that can be written sequentially, the incoming entries of a vertex arrive in ascending
+     * order, and the adjacency of a vertex is therefore two ascending runs that merge in linear
+     * time instead of one unordered range that has to be sorted. The strategy is chosen from the
+     * input rather than declared by the caller, so a caller that cannot promise the order still
+     * gets a correct graph.
      */
     static CsrGraph fromEndpoints(
             int[] sources, int[] targets, int edgeCount, long vertexCount, CsrDirection direction)
@@ -156,12 +165,25 @@ final class CsrMaterializer {
         int vertexArrayLength = Math.toIntExact(Math.addExact(vertexCount, 1));
         int entryCount = Math.toIntExact(entries);
         int[] offsets = new int[vertexArrayLength];
+        boolean sourcesAscend = true;
+        boolean targetsAscendWithinRun = true;
+        int previousSource = -1;
+        int previousTarget = -1;
         for (int edge = 0; edge < edgeCount; edge++) {
+            int source = sources[edge];
+            int target = targets[edge];
+            if (source < previousSource) {
+                sourcesAscend = false;
+            } else if (source == previousSource && target < previousTarget) {
+                targetsAscendWithinRun = false;
+            }
+            previousSource = source;
+            previousTarget = target;
             if (direction != CsrDirection.OUTGOING) {
-                offsets[targets[edge] + 1]++;
+                offsets[target + 1]++;
             }
             if (direction != CsrDirection.INCOMING) {
-                offsets[sources[edge] + 1]++;
+                offsets[source + 1]++;
             }
         }
         for (int vertex = 1; vertex < vertexArrayLength; vertex++) {
@@ -169,6 +191,16 @@ final class CsrMaterializer {
         }
         int[] destinations = new int[entryCount];
         int[] cursorByVertex = offsets.clone();
+        if (sourcesAscend) {
+            placeSorted(sources, targets, edgeCount, direction, destinations, cursorByVertex);
+            mergeRuns(
+                    offsets,
+                    cursorByVertex,
+                    destinations,
+                    direction,
+                    direction == CsrDirection.INCOMING || targetsAscendWithinRun);
+            return new CsrGraph(offsets, destinations);
+        }
         for (int edge = 0; edge < edgeCount; edge++) {
             if (direction != CsrDirection.OUTGOING) {
                 destinations[cursorByVertex[targets[edge]]++] = sources[edge];
@@ -181,6 +213,90 @@ final class CsrMaterializer {
             Arrays.sort(destinations, offsets[vertex], offsets[vertex + 1]);
         }
         return new CsrGraph(offsets, destinations);
+    }
+
+    /**
+     * Places entries knowing the endpoints are sorted by source. The incoming entries go first, so
+     * that the cursor is left standing on the boundary between the two runs of every vertex, which
+     * the merge then reads instead of recomputing it into another vertex-sized array. The outgoing
+     * run of a vertex is written from the cursor without advancing it, which is sound only because
+     * sorted input delivers that run contiguously.
+     */
+    private static void placeSorted(
+            int[] sources,
+            int[] targets,
+            int edgeCount,
+            CsrDirection direction,
+            int[] destinations,
+            int[] cursorByVertex) {
+        if (direction != CsrDirection.OUTGOING) {
+            for (int edge = 0; edge < edgeCount; edge++) {
+                destinations[cursorByVertex[targets[edge]]++] = sources[edge];
+            }
+        }
+        if (direction != CsrDirection.INCOMING) {
+            int edge = 0;
+            while (edge < edgeCount) {
+                int source = sources[edge];
+                int position = cursorByVertex[source];
+                while (edge < edgeCount && sources[edge] == source) {
+                    destinations[position++] = targets[edge++];
+                }
+            }
+        }
+    }
+
+    /**
+     * Orders every adjacency that {@link #placeSorted} left as two runs. When the outgoing run is
+     * ascending the two runs merge in linear time; otherwise the range is sorted, which is still
+     * cheaper than the unsorted path because the placement was sequential.
+     */
+    private static void mergeRuns(
+            int[] offsets,
+            int[] boundaries,
+            int[] destinations,
+            CsrDirection direction,
+            boolean outgoingAscends) {
+        if (direction != CsrDirection.UNDIRECTED) {
+            if (!outgoingAscends) {
+                for (int vertex = 0; vertex < offsets.length - 1; vertex++) {
+                    Arrays.sort(destinations, offsets[vertex], offsets[vertex + 1]);
+                }
+            }
+            return;
+        }
+        int[] buffer = new int[0];
+        for (int vertex = 0; vertex < offsets.length - 1; vertex++) {
+            int start = offsets[vertex];
+            int split = boundaries[vertex];
+            int end = offsets[vertex + 1];
+            if (start == split || split == end) {
+                if (!outgoingAscends) {
+                    Arrays.sort(destinations, start, end);
+                }
+                continue;
+            }
+            if (!outgoingAscends) {
+                Arrays.sort(destinations, split, end);
+            }
+            int leading = split - start;
+            if (buffer.length < leading) {
+                buffer = new int[Math.max(leading, buffer.length * 2)];
+            }
+            System.arraycopy(destinations, start, buffer, 0, leading);
+            int left = 0;
+            int right = split;
+            int write = start;
+            while (left < leading && right < end) {
+                destinations[write++] =
+                        buffer[left] <= destinations[right]
+                                ? buffer[left++]
+                                : destinations[right++];
+            }
+            while (left < leading) {
+                destinations[write++] = buffer[left++];
+            }
+        }
     }
 
     private static void validateBound(long value, String kind) {

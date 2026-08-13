@@ -22,6 +22,7 @@ package org.apache.graphar.reader;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
+import java.util.Arrays;
 import java.util.Random;
 import org.junit.Test;
 
@@ -137,6 +138,64 @@ public class CsrScaleIT {
         assertTrue(
                 "a bounded component must stay inside the response budget: " + componentMillis,
                 componentMillis < RESPONSE_BUDGET_MILLIS);
+    }
+
+    @Test
+    public void buildsAnOrderedTopologyAtVolume() {
+        long vertexCount = size("GRAPHAR_SCALE_VERTICES", DEFAULT_VERTICES);
+        long edgeCount = size("GRAPHAR_SCALE_EDGES", DEFAULT_EDGES);
+        int edges = Math.toIntExact(edgeCount);
+
+        int[] sources = new int[edges];
+        int[] targets = new int[edges];
+        Random random = new Random(SEED);
+        for (int edge = 0; edge < edges; edge++) {
+            sources[edge] = (int) Math.floorMod(random.nextLong(), vertexCount);
+            targets[edge] = (int) Math.floorMod(random.nextLong(), vertexCount);
+        }
+        Arrays.sort(sources);
+        int runStart = 0;
+        while (runStart < edges) {
+            int runEnd = runStart;
+            while (runEnd < edges && sources[runEnd] == sources[runStart]) {
+                runEnd++;
+            }
+            Arrays.sort(targets, runStart, runEnd);
+            runStart = runEnd;
+        }
+
+        long buildStart = System.nanoTime();
+        CsrGraph csr;
+        try {
+            csr =
+                    CsrMaterializer.fromEndpoints(
+                            sources, targets, edges, vertexCount, CsrDirection.UNDIRECTED);
+        } catch (java.io.IOException failure) {
+            throw new AssertionError(failure);
+        }
+        long buildMillis = (System.nanoTime() - buildStart) / 1_000_000L;
+        sources = null;
+        targets = null;
+
+        assertEquals(vertexCount, csr.vertexCount());
+        assertEquals(edgeCount * 2L, csr.edgeCount());
+        System.out.println(
+                "ordered: vertices="
+                        + vertexCount
+                        + " edges="
+                        + edgeCount
+                        + " buildMillis="
+                        + buildMillis);
+
+        for (long vertex = 0; vertex < 1_000L; vertex++) {
+            long degree = csr.degree(vertex);
+            long previous = -1L;
+            for (long position = 0; position < degree; position++) {
+                long neighbor = csr.neighbor(vertex, position);
+                assertTrue("adjacency must stay ordered", neighbor >= previous);
+                previous = neighbor;
+            }
+        }
     }
 
     private static long size(String variable, long fallback) {
