@@ -63,8 +63,8 @@ public final class BoundedTraversal {
         if (start < 0 || start >= vertexCount) {
             throw new IllegalArgumentException("Start vertex is outside the graph: " + start);
         }
-        long[] offsets = csr.offsets();
-        long[] destinations = csr.destinations();
+        long[] offsets = csr.rawOffsets();
+        long[] destinations = csr.rawDestinations();
         boolean[] discovered = new boolean[Math.toIntExact(vertexCount)];
 
         int capacity = Math.toIntExact(Math.min(maxNodes, vertexCount));

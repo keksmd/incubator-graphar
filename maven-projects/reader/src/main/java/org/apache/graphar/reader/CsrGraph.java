@@ -52,13 +52,58 @@ public final class CsrGraph {
         return destinations.length;
     }
 
-    /** Returns a defensive copy of the CSR offset array. */
+    /** Returns the number of entries adjacent to {@code vertex}. */
+    public long degree(long vertex) {
+        int index = checkedIndex(vertex);
+        return offsets[index + 1] - offsets[index];
+    }
+
+    /**
+     * Returns the neighbour stored at {@code position} within the adjacency of {@code vertex}.
+     * Serving code iterates a vertex through this accessor and through {@link #degree(long)}, which
+     * costs no allocation, instead of exporting the arrays.
+     */
+    public long neighbor(long vertex, long position) {
+        int index = checkedIndex(vertex);
+        long from = offsets[index];
+        if (position < 0 || position >= offsets[index + 1] - from) {
+            throw new IllegalArgumentException(
+                    "Adjacency position is outside the neighbourhood of "
+                            + vertex
+                            + ": "
+                            + position);
+        }
+        return destinations[Math.toIntExact(from + position)];
+    }
+
+    /**
+     * Returns a defensive copy of the CSR offset array. The copy is the size of the graph, so bulk
+     * export is for handing the topology to another component once, not for serving requests.
+     */
     public long[] offsets() {
         return offsets.clone();
     }
 
-    /** Returns a defensive copy of the CSR destination array. */
+    /**
+     * Returns a defensive copy of the CSR destination array. The copy is the size of the graph, so
+     * bulk export is for handing the topology to another component once, not for serving requests.
+     */
     public long[] destinations() {
         return destinations.clone();
+    }
+
+    long[] rawOffsets() {
+        return offsets;
+    }
+
+    long[] rawDestinations() {
+        return destinations;
+    }
+
+    private int checkedIndex(long vertex) {
+        if (vertex < 0 || vertex >= vertexCount()) {
+            throw new IllegalArgumentException("Vertex is outside the graph: " + vertex);
+        }
+        return Math.toIntExact(vertex);
     }
 }

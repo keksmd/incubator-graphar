@@ -115,8 +115,8 @@ public final class HeterogeneousCsr {
     /** Returns every global identifier adjacent to {@code globalIndex} in the merged topology. */
     public long[] neighbors(long globalIndex) {
         ordinalOf(globalIndex);
-        long[] offsets = csr.offsets();
-        long[] destinations = csr.destinations();
+        long[] offsets = csr.rawOffsets();
+        long[] destinations = csr.rawDestinations();
         int from = Math.toIntExact(offsets[Math.toIntExact(globalIndex)]);
         int to = Math.toIntExact(offsets[Math.toIntExact(globalIndex) + 1]);
         return Arrays.copyOfRange(destinations, from, to);
