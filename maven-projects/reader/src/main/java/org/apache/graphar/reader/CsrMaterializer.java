@@ -108,10 +108,7 @@ final class CsrMaterializer {
             long edgeCount,
             CsrDirection direction)
             throws IOException {
-        int vertexArrayLength = Math.toIntExact(Math.addExact(vertexCount, 1));
         int storedEdges = Math.toIntExact(edgeCount);
-        long entriesPerEdge = direction == CsrDirection.UNDIRECTED ? 2L : 1L;
-        int entryCount = Math.toIntExact(Math.multiplyExact(edgeCount, entriesPerEdge));
         long[] sources = new long[storedEdges];
         long[] targets = new long[storedEdges];
         int stored = 0;
@@ -142,10 +139,26 @@ final class CsrMaterializer {
             throw new IllegalArgumentException(
                     "Topology rows do not match GraphAr edge_count control files.");
         }
+        return fromEndpoints(sources, targets, storedEdges, vertexCount, direction);
+    }
+
+    /**
+     * Places buffered endpoint pairs into a CSR by counting sort. Callers that merge several
+     * topologies into one identifier space reach this directly, because their edges no longer
+     * arrive sorted by source and cannot use the streaming path.
+     */
+    static CsrGraph fromEndpoints(
+            long[] sources, long[] targets, int edgeCount, long vertexCount, CsrDirection direction)
+            throws IOException {
+        int vertexArrayLength = Math.toIntExact(Math.addExact(vertexCount, 1));
+        long entriesPerEdge = direction == CsrDirection.UNDIRECTED ? 2L : 1L;
+        int entryCount = Math.toIntExact(Math.multiplyExact((long) edgeCount, entriesPerEdge));
         long[] offsets = new long[vertexArrayLength];
-        for (int edge = 0; edge < storedEdges; edge++) {
-            offsets[Math.toIntExact(targets[edge]) + 1]++;
-            if (direction == CsrDirection.UNDIRECTED) {
+        for (int edge = 0; edge < edgeCount; edge++) {
+            if (direction != CsrDirection.OUTGOING) {
+                offsets[Math.toIntExact(targets[edge]) + 1]++;
+            }
+            if (direction != CsrDirection.INCOMING) {
                 offsets[Math.toIntExact(sources[edge]) + 1]++;
             }
         }
@@ -154,10 +167,12 @@ final class CsrMaterializer {
         }
         long[] destinations = new long[entryCount];
         long[] cursorByVertex = offsets.clone();
-        for (int edge = 0; edge < storedEdges; edge++) {
-            int target = Math.toIntExact(targets[edge]);
-            destinations[Math.toIntExact(cursorByVertex[target]++)] = sources[edge];
-            if (direction == CsrDirection.UNDIRECTED) {
+        for (int edge = 0; edge < edgeCount; edge++) {
+            if (direction != CsrDirection.OUTGOING) {
+                int target = Math.toIntExact(targets[edge]);
+                destinations[Math.toIntExact(cursorByVertex[target]++)] = sources[edge];
+            }
+            if (direction != CsrDirection.INCOMING) {
                 int source = Math.toIntExact(sources[edge]);
                 destinations[Math.toIntExact(cursorByVertex[source]++)] = targets[edge];
             }
