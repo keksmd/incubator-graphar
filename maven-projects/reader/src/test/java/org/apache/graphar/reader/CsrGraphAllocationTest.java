@@ -67,6 +67,35 @@ public class CsrGraphAllocationTest {
     }
 
     @Test
+    public void aBoundedTraversalCostsTheNodeBudgetAndNotTheVertexCount() {
+        com.sun.management.ThreadMXBean bean = threadBean();
+        CsrGraph csr = ring();
+        int maxNodes = 50;
+
+        for (int start = 0; start < 4; start++) {
+            BoundedTraversal.neighborhood(csr, start, 4, maxNodes);
+        }
+
+        long before = bean.getThreadAllocatedBytes(Thread.currentThread().getId());
+        int calls = 100;
+        for (int start = 0; start < calls; start++) {
+            assertTrue(BoundedTraversal.neighborhood(csr, start, 4, maxNodes).size() > 1);
+        }
+        long perCall =
+                (bean.getThreadAllocatedBytes(Thread.currentThread().getId()) - before) / calls;
+
+        assertTrue(
+                "a request bounded to "
+                        + maxNodes
+                        + " nodes allocated "
+                        + perCall
+                        + " bytes on a graph of "
+                        + VERTEX_COUNT
+                        + " vertices",
+                perCall < 8L * 1024L);
+    }
+
+    @Test
     public void iteratingANeighbourhoodAllocatesNothing() {
         com.sun.management.ThreadMXBean bean = threadBean();
         CsrGraph csr = ring();

@@ -65,16 +65,16 @@ public final class BoundedTraversal {
         }
         long[] offsets = csr.rawOffsets();
         long[] destinations = csr.rawDestinations();
-        boolean[] discovered = new boolean[Math.toIntExact(vertexCount)];
 
         int capacity = Math.toIntExact(Math.min(maxNodes, vertexCount));
+        DiscoveredSet discovered = new DiscoveredSet(capacity);
         long[] vertices = new long[capacity];
         int[] depths = new int[capacity];
         int size = 0;
         vertices[size] = start;
         depths[size] = 0;
         size++;
-        discovered[Math.toIntExact(start)] = true;
+        discovered.add(start);
 
         boolean truncated = false;
         int frontierStart = 0;
@@ -88,15 +88,15 @@ public final class BoundedTraversal {
                 int from = Math.toIntExact(offsets[vertex]);
                 int to = Math.toIntExact(offsets[vertex + 1]);
                 for (int entry = from; entry < to; entry++) {
-                    int neighbor = Math.toIntExact(destinations[entry]);
-                    if (discovered[neighbor]) {
+                    long neighbor = destinations[entry];
+                    if (discovered.contains(neighbor)) {
                         continue;
                     }
                     if (size == capacity) {
                         truncated = true;
                         break;
                     }
-                    discovered[neighbor] = true;
+                    discovered.add(neighbor);
                     vertices[size] = neighbor;
                     depths[size] = depth;
                     size++;
@@ -111,5 +111,44 @@ public final class BoundedTraversal {
         }
         return new TraversalResult(
                 Arrays.copyOf(vertices, size), Arrays.copyOf(depths, size), truncated);
+    }
+
+    /**
+     * An open-addressed set of the vertices already reached, sized by the node budget rather than
+     * by the graph.
+     *
+     * <p>A bitmap over the whole vertex space costs one allocation per request that grows with the
+     * graph, which on a graph of tens of millions of vertices dominates a request that is allowed
+     * to touch fifty of them. This set is sized by what the request may discover, so the cost of a
+     * bounded request stays bounded as the graph grows.
+     */
+    private static final class DiscoveredSet {
+        private static final long EMPTY = -1L;
+
+        private final long[] slots;
+        private final int mask;
+
+        private DiscoveredSet(int capacity) {
+            int size = Integer.highestOneBit(Math.max(4, capacity)) * 4;
+            this.slots = new long[size];
+            this.mask = size - 1;
+            Arrays.fill(slots, EMPTY);
+        }
+
+        private int slotOf(long vertex) {
+            int slot = (int) ((vertex * 0x9E3779B97F4A7C15L) >>> 40) & mask;
+            while (slots[slot] != EMPTY && slots[slot] != vertex) {
+                slot = (slot + 1) & mask;
+            }
+            return slot;
+        }
+
+        private boolean contains(long vertex) {
+            return slots[slotOf(vertex)] == vertex;
+        }
+
+        private void add(long vertex) {
+            slots[slotOf(vertex)] = vertex;
+        }
     }
 }
