@@ -29,8 +29,9 @@ package org.apache.graphar.reader;
  * a statement of what was attempted and what the limit is, checked before any array is allocated.
  *
  * <p>The numbers are exact, not estimates: a CSR of {@code v} vertices and {@code e} adjacency
- * entries occupies {@code 8 * (v + 1)} bytes of offsets and {@code 8 * e} bytes of destinations. An
- * undirected projection stores each edge twice, so its entry count is twice its edge count.
+ * entries occupies {@code 4 * (v + 1)} bytes of offsets and {@code 4 * e} bytes of destinations,
+ * because a projection this class admits is one whose identifiers fit an array index. An undirected
+ * projection stores each edge twice, so its entry count is twice its edge count.
  */
 public final class ProjectionCapacity {
     /** The largest number of vertices a heap CSR can address. */
@@ -39,7 +40,7 @@ public final class ProjectionCapacity {
     /** The largest number of adjacency entries a heap CSR can address. */
     public static final long MAX_ENTRIES = Integer.MAX_VALUE - 8L;
 
-    private static final long BYTES_PER_SLOT = Long.BYTES;
+    private static final long BYTES_PER_SLOT = Integer.BYTES;
 
     private ProjectionCapacity() {}
 

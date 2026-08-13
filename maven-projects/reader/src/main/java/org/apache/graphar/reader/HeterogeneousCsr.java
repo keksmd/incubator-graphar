@@ -115,11 +115,15 @@ public final class HeterogeneousCsr {
     /** Returns every global identifier adjacent to {@code globalIndex} in the merged topology. */
     public long[] neighbors(long globalIndex) {
         ordinalOf(globalIndex);
-        long[] offsets = csr.rawOffsets();
-        long[] destinations = csr.rawDestinations();
-        int from = Math.toIntExact(offsets[Math.toIntExact(globalIndex)]);
-        int to = Math.toIntExact(offsets[Math.toIntExact(globalIndex) + 1]);
-        return Arrays.copyOfRange(destinations, from, to);
+        int[] offsets = csr.rawOffsets();
+        int[] destinations = csr.rawDestinations();
+        int from = offsets[Math.toIntExact(globalIndex)];
+        int to = offsets[Math.toIntExact(globalIndex) + 1];
+        long[] adjacent = new long[to - from];
+        for (int entry = from; entry < to; entry++) {
+            adjacent[entry - from] = destinations[entry];
+        }
+        return adjacent;
     }
 
     private int typeOrdinal(String vertexType) {
@@ -219,8 +223,8 @@ public final class HeterogeneousCsr {
             ProjectionCapacity.requireHeadroom(
                     totalVertices, totalEdges, direction, availableHeapBytes());
             int storedEdges = Math.toIntExact(totalEdges);
-            long[] sources = new long[storedEdges];
-            long[] targets = new long[storedEdges];
+            int[] sources = new int[storedEdges];
+            int[] targets = new int[storedEdges];
             int stored = 0;
             int position = 0;
             for (EdgeTriplet triplet : triplets) {
@@ -233,8 +237,10 @@ public final class HeterogeneousCsr {
                                     "Topology rows exceed GraphAr edge_count control files: "
                                             + triplet);
                         }
-                        sources[stored] = Math.addExact(sourceBase, cursor.source());
-                        targets[stored] = Math.addExact(targetBase, cursor.destination());
+                        sources[stored] =
+                                Math.toIntExact(Math.addExact(sourceBase, cursor.source()));
+                        targets[stored] =
+                                Math.toIntExact(Math.addExact(targetBase, cursor.destination()));
                         stored++;
                     }
                 }

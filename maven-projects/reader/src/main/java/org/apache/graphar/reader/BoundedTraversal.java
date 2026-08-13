@@ -63,18 +63,18 @@ public final class BoundedTraversal {
         if (start < 0 || start >= vertexCount) {
             throw new IllegalArgumentException("Start vertex is outside the graph: " + start);
         }
-        long[] offsets = csr.rawOffsets();
-        long[] destinations = csr.rawDestinations();
+        int[] offsets = csr.rawOffsets();
+        int[] destinations = csr.rawDestinations();
 
         int capacity = Math.toIntExact(Math.min(maxNodes, vertexCount));
         DiscoveredSet discovered = new DiscoveredSet(capacity);
-        long[] vertices = new long[capacity];
+        int[] vertices = new int[capacity];
         int[] depths = new int[capacity];
         int size = 0;
-        vertices[size] = start;
+        vertices[size] = (int) start;
         depths[size] = 0;
         size++;
-        discovered.add(start);
+        discovered.add((int) start);
 
         boolean truncated = false;
         int frontierStart = 0;
@@ -84,11 +84,11 @@ public final class BoundedTraversal {
                 depth++) {
             int nextStart = size;
             for (int position = frontierStart; position < frontierEnd && !truncated; position++) {
-                int vertex = Math.toIntExact(vertices[position]);
-                int from = Math.toIntExact(offsets[vertex]);
-                int to = Math.toIntExact(offsets[vertex + 1]);
+                int vertex = vertices[position];
+                int from = offsets[vertex];
+                int to = offsets[vertex + 1];
                 for (int entry = from; entry < to; entry++) {
-                    long neighbor = destinations[entry];
+                    int neighbor = destinations[entry];
                     if (discovered.contains(neighbor)) {
                         continue;
                     }
@@ -109,8 +109,11 @@ public final class BoundedTraversal {
             frontierStart = nextStart;
             frontierEnd = size;
         }
-        return new TraversalResult(
-                Arrays.copyOf(vertices, size), Arrays.copyOf(depths, size), truncated);
+        long[] reached = new long[size];
+        for (int position = 0; position < size; position++) {
+            reached[position] = vertices[position];
+        }
+        return new TraversalResult(reached, Arrays.copyOf(depths, size), truncated);
     }
 
     /**
@@ -123,19 +126,19 @@ public final class BoundedTraversal {
      * bounded request stays bounded as the graph grows.
      */
     private static final class DiscoveredSet {
-        private static final long EMPTY = -1L;
+        private static final int EMPTY = -1;
 
-        private final long[] slots;
+        private final int[] slots;
         private final int mask;
 
         private DiscoveredSet(int capacity) {
             int size = Integer.highestOneBit(Math.max(4, capacity)) * 4;
-            this.slots = new long[size];
+            this.slots = new int[size];
             this.mask = size - 1;
             Arrays.fill(slots, EMPTY);
         }
 
-        private int slotOf(long vertex) {
+        private int slotOf(int vertex) {
             int slot = (int) ((vertex * 0x9E3779B97F4A7C15L) >>> 40) & mask;
             while (slots[slot] != EMPTY && slots[slot] != vertex) {
                 slot = (slot + 1) & mask;
@@ -143,11 +146,11 @@ public final class BoundedTraversal {
             return slot;
         }
 
-        private boolean contains(long vertex) {
+        private boolean contains(int vertex) {
             return slots[slotOf(vertex)] == vertex;
         }
 
-        private void add(long vertex) {
+        private void add(int vertex) {
             slots[slotOf(vertex)] = vertex;
         }
     }

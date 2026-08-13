@@ -66,14 +66,14 @@ public class CsrScaleIT {
                         + Runtime.getRuntime().maxMemory());
 
         int edges = Math.toIntExact(edgeCount);
-        long[] sources = new long[edges];
-        long[] targets = new long[edges];
+        int[] sources = new int[edges];
+        int[] targets = new int[edges];
         Random random = new Random(SEED);
         for (int edge = 0; edge < edges; edge++) {
             long source = Math.floorMod(random.nextLong(), vertexCount);
             long target = Math.floorMod(random.nextLong(), vertexCount);
-            sources[edge] = source;
-            targets[edge] = source == target ? (target + 1) % vertexCount : target;
+            sources[edge] = (int) source;
+            targets[edge] = (int) (source == target ? (target + 1) % vertexCount : target);
         }
 
         long buildStart = System.nanoTime();

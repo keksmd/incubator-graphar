@@ -37,9 +37,9 @@ public class ProjectionCapacityTest {
     }
 
     @Test
-    public void theHeapCostOfAProjectionIsEightBytesPerSlot() {
+    public void theHeapCostOfAProjectionIsFourBytesPerSlot() {
         assertEquals(
-                8L * (1_000L + 1L) + 8L * 4_000L, ProjectionCapacity.heapBytes(1_000L, 4_000L));
+                4L * (1_000L + 1L) + 4L * 4_000L, ProjectionCapacity.heapBytes(1_000L, 4_000L));
     }
 
     @Test
@@ -51,8 +51,8 @@ public class ProjectionCapacityTest {
                         vertices, ProjectionCapacity.entryCount(edges, CsrDirection.UNDIRECTED));
         long peak = ProjectionCapacity.peakBuildBytes(vertices, edges, CsrDirection.UNDIRECTED);
 
-        assertEquals(3_600_000_008L, serving);
-        assertEquals(7_200_000_016L, peak);
+        assertEquals(1_800_000_004L, serving);
+        assertEquals(3_600_000_008L, peak);
         assertTrue("a build peaks above what it settles at", peak > serving);
     }
 
@@ -89,7 +89,7 @@ public class ProjectionCapacityTest {
         try {
             ProjectionCapacity.requireHeadroom(
                     10L * 1_000_000L,
-                    40L * 1_000_000L,
+                    80L * 1_000_000L,
                     CsrDirection.UNDIRECTED,
                     256L * 1024 * 1024);
             fail("a build needing more than the heap must not be attempted");

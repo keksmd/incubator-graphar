@@ -19,27 +19,35 @@
 
 package org.apache.graphar.reader;
 
-/** An immutable heap CSR topology representation with long vertex and destination IDs. */
+/**
+ * An immutable heap CSR topology.
+ *
+ * <p>The public accessors speak {@code long}, because a vertex identifier is a graph-level concept
+ * and callers should not have to know how wide the storage is. The storage itself is {@code int},
+ * because {@link ProjectionCapacity} already refuses any graph whose vertex count or entry count
+ * does not fit an array index. A projection this class can hold is therefore a projection whose
+ * identifiers fit thirty-two bits, and storing them in sixty-four wasted half of the topology.
+ */
 public final class CsrGraph {
-    private final long[] offsets;
-    private final long[] destinations;
+    private final int[] offsets;
+    private final int[] destinations;
 
-    CsrGraph(long[] offsets, long[] destinations) {
+    CsrGraph(int[] offsets, int[] destinations) {
         if (offsets.length == 0
                 || offsets[0] != 0
                 || offsets[offsets.length - 1] != destinations.length) {
             throw new IllegalArgumentException(
                     "CSR offsets must start at zero and end at edge count.");
         }
-        long previous = 0;
-        for (long offset : offsets) {
+        int previous = 0;
+        for (int offset : offsets) {
             if (offset < previous || offset > destinations.length) {
                 throw new IllegalArgumentException("CSR offsets must be monotonic and in bounds.");
             }
             previous = offset;
         }
-        this.offsets = offsets.clone();
-        this.destinations = destinations.clone();
+        this.offsets = offsets;
+        this.destinations = destinations;
     }
 
     /** Returns the number of vertices. */
@@ -55,7 +63,7 @@ public final class CsrGraph {
     /** Returns the number of entries adjacent to {@code vertex}. */
     public long degree(long vertex) {
         int index = checkedIndex(vertex);
-        return offsets[index + 1] - offsets[index];
+        return offsets[index + 1] - (long) offsets[index];
     }
 
     /**
@@ -65,8 +73,8 @@ public final class CsrGraph {
      */
     public long neighbor(long vertex, long position) {
         int index = checkedIndex(vertex);
-        long from = offsets[index];
-        if (position < 0 || position >= offsets[index + 1] - from) {
+        int from = offsets[index];
+        if (position < 0 || position >= offsets[index + 1] - (long) from) {
             throw new IllegalArgumentException(
                     "Adjacency position is outside the neighbourhood of "
                             + vertex
@@ -77,33 +85,41 @@ public final class CsrGraph {
     }
 
     /**
-     * Returns a defensive copy of the CSR offset array. The copy is the size of the graph, so bulk
+     * Returns a widened copy of the CSR offset array. The copy is the size of the graph, so bulk
      * export is for handing the topology to another component once, not for serving requests.
      */
     public long[] offsets() {
-        return offsets.clone();
+        return widen(offsets);
     }
 
     /**
-     * Returns a defensive copy of the CSR destination array. The copy is the size of the graph, so
+     * Returns a widened copy of the CSR destination array. The copy is the size of the graph, so
      * bulk export is for handing the topology to another component once, not for serving requests.
      */
     public long[] destinations() {
-        return destinations.clone();
+        return widen(destinations);
     }
 
-    long[] rawOffsets() {
+    int[] rawOffsets() {
         return offsets;
     }
 
-    long[] rawDestinations() {
+    int[] rawDestinations() {
         return destinations;
+    }
+
+    private static long[] widen(int[] values) {
+        long[] widened = new long[values.length];
+        for (int index = 0; index < values.length; index++) {
+            widened[index] = values[index];
+        }
+        return widened;
     }
 
     private int checkedIndex(long vertex) {
         if (vertex < 0 || vertex >= vertexCount()) {
             throw new IllegalArgumentException("Vertex is outside the graph: " + vertex);
         }
-        return Math.toIntExact(vertex);
+        return (int) vertex;
     }
 }

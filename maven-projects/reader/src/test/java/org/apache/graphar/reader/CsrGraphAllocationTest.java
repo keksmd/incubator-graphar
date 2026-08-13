@@ -172,12 +172,12 @@ public class CsrGraphAllocationTest {
     }
 
     private static CsrGraph ring() {
-        long[] offsets = new long[VERTEX_COUNT + 1];
-        long[] destinations = new long[VERTEX_COUNT * DEGREE];
+        int[] offsets = new int[VERTEX_COUNT + 1];
+        int[] destinations = new int[VERTEX_COUNT * DEGREE];
         for (int vertex = 0; vertex < VERTEX_COUNT; vertex++) {
             offsets[vertex + 1] = offsets[vertex] + DEGREE;
             for (int step = 0; step < DEGREE; step++) {
-                destinations[vertex * DEGREE + step] = (vertex + step + 1L) % VERTEX_COUNT;
+                destinations[vertex * DEGREE + step] = (vertex + step + 1) % VERTEX_COUNT;
             }
         }
         return new CsrGraph(offsets, destinations);

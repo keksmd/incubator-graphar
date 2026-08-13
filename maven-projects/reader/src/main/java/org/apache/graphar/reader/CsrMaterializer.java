@@ -65,8 +65,8 @@ final class CsrMaterializer {
         ProjectionCapacity.requireAddressable(vertexCount, edgeCount);
         int vertexArrayLength = Math.toIntExact(Math.addExact(vertexCount, 1));
         int edgeArrayLength = Math.toIntExact(edgeCount);
-        long[] offsets = new long[vertexArrayLength];
-        long[] destinations = new long[edgeArrayLength];
+        int[] offsets = new int[vertexArrayLength];
+        int[] destinations = new int[edgeArrayLength];
         int nextOffset = 1;
         int nextDestination = 0;
         long previousSource = -1;
@@ -84,7 +84,7 @@ final class CsrMaterializer {
                     throw new IllegalArgumentException(
                             "Topology rows exceed GraphAr edge_count control files.");
                 }
-                destinations[nextDestination++] = cursor.destination();
+                destinations[nextDestination++] = Math.toIntExact(cursor.destination());
                 previousSource = source;
             }
         }
@@ -100,8 +100,8 @@ final class CsrMaterializer {
 
     /**
      * Reads the topology once into endpoint buffers, then places every entry by counting sort. The
-     * buffers cost sixteen bytes per stored edge and replace a second full scan of the dataset,
-     * which is the dominant cost of building a transposed adjacency from Parquet chunks.
+     * buffers cost eight bytes per stored edge and replace a second full scan of the dataset, which
+     * is the dominant cost of building a transposed adjacency from Parquet chunks.
      */
     private static CsrGraph materializeTransposed(
             OrderedSourceEdgeReader reader,
@@ -110,8 +110,8 @@ final class CsrMaterializer {
             CsrDirection direction)
             throws IOException {
         int storedEdges = Math.toIntExact(edgeCount);
-        long[] sources = new long[storedEdges];
-        long[] targets = new long[storedEdges];
+        int[] sources = new int[storedEdges];
+        int[] targets = new int[storedEdges];
         int stored = 0;
         long previousSource = -1;
         try (EdgeCursor cursor = reader.scanEdges()) {
@@ -130,8 +130,8 @@ final class CsrMaterializer {
                     throw new IllegalArgumentException(
                             "Topology rows exceed GraphAr edge_count control files.");
                 }
-                sources[stored] = source;
-                targets[stored] = destination;
+                sources[stored] = (int) source;
+                targets[stored] = (int) destination;
                 stored++;
                 previousSource = source;
             }
@@ -149,41 +149,36 @@ final class CsrMaterializer {
      * arrive sorted by source and cannot use the streaming path.
      */
     static CsrGraph fromEndpoints(
-            long[] sources, long[] targets, int edgeCount, long vertexCount, CsrDirection direction)
+            int[] sources, int[] targets, int edgeCount, long vertexCount, CsrDirection direction)
             throws IOException {
         long entries = ProjectionCapacity.entryCount(edgeCount, direction);
         ProjectionCapacity.requireAddressable(vertexCount, entries);
         int vertexArrayLength = Math.toIntExact(Math.addExact(vertexCount, 1));
         int entryCount = Math.toIntExact(entries);
-        long[] offsets = new long[vertexArrayLength];
+        int[] offsets = new int[vertexArrayLength];
         for (int edge = 0; edge < edgeCount; edge++) {
             if (direction != CsrDirection.OUTGOING) {
-                offsets[Math.toIntExact(targets[edge]) + 1]++;
+                offsets[targets[edge] + 1]++;
             }
             if (direction != CsrDirection.INCOMING) {
-                offsets[Math.toIntExact(sources[edge]) + 1]++;
+                offsets[sources[edge] + 1]++;
             }
         }
         for (int vertex = 1; vertex < vertexArrayLength; vertex++) {
             offsets[vertex] += offsets[vertex - 1];
         }
-        long[] destinations = new long[entryCount];
-        long[] cursorByVertex = offsets.clone();
+        int[] destinations = new int[entryCount];
+        int[] cursorByVertex = offsets.clone();
         for (int edge = 0; edge < edgeCount; edge++) {
             if (direction != CsrDirection.OUTGOING) {
-                int target = Math.toIntExact(targets[edge]);
-                destinations[Math.toIntExact(cursorByVertex[target]++)] = sources[edge];
+                destinations[cursorByVertex[targets[edge]]++] = sources[edge];
             }
             if (direction != CsrDirection.INCOMING) {
-                int source = Math.toIntExact(sources[edge]);
-                destinations[Math.toIntExact(cursorByVertex[source]++)] = targets[edge];
+                destinations[cursorByVertex[sources[edge]]++] = targets[edge];
             }
         }
         for (int vertex = 0; vertex < vertexArrayLength - 1; vertex++) {
-            Arrays.sort(
-                    destinations,
-                    Math.toIntExact(offsets[vertex]),
-                    Math.toIntExact(offsets[vertex + 1]));
+            Arrays.sort(destinations, offsets[vertex], offsets[vertex + 1]);
         }
         return new CsrGraph(offsets, destinations);
     }
