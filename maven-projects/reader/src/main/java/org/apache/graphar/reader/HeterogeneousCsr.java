@@ -214,6 +214,10 @@ public final class HeterogeneousCsr {
                 readers.add(reader);
                 totalEdges = Math.addExact(totalEdges, reader.edgeCount());
             }
+            ProjectionCapacity.requireAddressable(
+                    totalVertices, ProjectionCapacity.entryCount(totalEdges, direction));
+            ProjectionCapacity.requireHeadroom(
+                    totalVertices, totalEdges, direction, availableHeapBytes());
             int storedEdges = Math.toIntExact(totalEdges);
             long[] sources = new long[storedEdges];
             long[] targets = new long[storedEdges];
@@ -243,6 +247,11 @@ public final class HeterogeneousCsr {
                     CsrMaterializer.fromEndpoints(
                             sources, targets, storedEdges, totalVertices, direction);
             return new HeterogeneousCsr(types, bases, indexByType, csr);
+        }
+
+        private static long availableHeapBytes() {
+            Runtime runtime = Runtime.getRuntime();
+            return runtime.maxMemory() - runtime.totalMemory() + runtime.freeMemory();
         }
 
         private void requireDeclared(String vertexType, EdgeTriplet triplet) {

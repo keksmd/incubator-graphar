@@ -62,6 +62,7 @@ final class CsrMaterializer {
 
     private static CsrGraph materializeOutgoing(
             OrderedSourceEdgeReader reader, long vertexCount, long edgeCount) throws IOException {
+        ProjectionCapacity.requireAddressable(vertexCount, edgeCount);
         int vertexArrayLength = Math.toIntExact(Math.addExact(vertexCount, 1));
         int edgeArrayLength = Math.toIntExact(edgeCount);
         long[] offsets = new long[vertexArrayLength];
@@ -150,9 +151,10 @@ final class CsrMaterializer {
     static CsrGraph fromEndpoints(
             long[] sources, long[] targets, int edgeCount, long vertexCount, CsrDirection direction)
             throws IOException {
+        long entries = ProjectionCapacity.entryCount(edgeCount, direction);
+        ProjectionCapacity.requireAddressable(vertexCount, entries);
         int vertexArrayLength = Math.toIntExact(Math.addExact(vertexCount, 1));
-        long entriesPerEdge = direction == CsrDirection.UNDIRECTED ? 2L : 1L;
-        int entryCount = Math.toIntExact(Math.multiplyExact((long) edgeCount, entriesPerEdge));
+        int entryCount = Math.toIntExact(entries);
         long[] offsets = new long[vertexArrayLength];
         for (int edge = 0; edge < edgeCount; edge++) {
             if (direction != CsrDirection.OUTGOING) {
