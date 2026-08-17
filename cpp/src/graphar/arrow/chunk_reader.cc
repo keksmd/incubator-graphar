@@ -24,6 +24,7 @@
 
 #include "arrow/api.h"
 #include "arrow/compute/api.h"
+#include "arrow/util/config.h"
 
 #include "graphar/arrow/chunk_reader.h"
 #include "graphar/filesystem.h"
@@ -75,7 +76,7 @@ Status GeneralCast(const std::shared_ptr<arrow::Array>& in,
                    std::shared_ptr<arrow::Array>* out) {
   static bool initialized = false;
   if (!initialized) {
-#if ARROW_VERSION >= 21000000
+#if defined(ARROW_VERSION) && ARROW_VERSION >= 21000000
     RETURN_NOT_ARROW_OK(arrow::compute::Initialize());
 #endif
     initialized = true;
@@ -119,7 +120,7 @@ Status CastTableWithSchema(const std::shared_ptr<arrow::Table>& table,
                            std::shared_ptr<arrow::Table>* out_table) {
   static bool initialized = false;
   if (!initialized) {
-#if ARROW_VERSION >= 21000000
+#if defined(ARROW_VERSION) && ARROW_VERSION >= 21000000
     RETURN_NOT_ARROW_OK(arrow::compute::Initialize());
 #endif
     initialized = true;

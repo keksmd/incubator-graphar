@@ -24,6 +24,7 @@
 #include <utility>
 #include "arrow/api.h"
 #include "arrow/compute/api.h"
+#include "arrow/util/config.h"
 #include "graphar/fwd.h"
 #include "graphar/writer_util.h"
 #if defined(ARROW_VERSION) && ARROW_VERSION >= 12000000
@@ -96,7 +97,7 @@ Result<std::shared_ptr<arrow::Table>> ExecutePlanAndCollectAsTable(
 
   // Arrow 17 marks an already drained plan as cancelled when StopProducing is
   // called. Newer Arrow versions retain the existing explicit shutdown.
-#if ARROW_VERSION >= 21000000
+#if defined(ARROW_VERSION) && ARROW_VERSION >= 21000000
   plan->StopProducing();
 #endif
   // plan mark finished
@@ -1024,7 +1025,7 @@ Result<std::shared_ptr<arrow::Table>> EdgeChunkWriter::getOffsetTable(
 Result<std::shared_ptr<arrow::Table>> EdgeChunkWriter::sortTable(
     const std::shared_ptr<arrow::Table>& input_table,
     const std::string& column_name) {
-#if ARROW_VERSION >= 21000000
+#if defined(ARROW_VERSION) && ARROW_VERSION >= 21000000
   RETURN_NOT_ARROW_OK(arrow::compute::Initialize());
   arrow::dataset::internal::Initialize();
 #endif

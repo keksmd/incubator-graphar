@@ -25,7 +25,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "arrow/util/config.h"
 #include "result/result.hpp"
 
 #include "graphar/macros.h"
