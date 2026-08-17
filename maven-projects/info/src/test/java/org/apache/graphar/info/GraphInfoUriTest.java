@@ -133,4 +133,43 @@ public class GraphInfoUriTest {
                 edgeInfo.getPropertyGroupChunkUri(
                         propertyGroup, AdjListType.ordered_by_source, 2, 1));
     }
+
+    @Test
+    public void testEdgePathsRejectMissingAdjacentListPrefix() {
+        EdgeInfo edgeInfo = edgeInfoWithAdjacentListPrefix(null);
+
+        IllegalArgumentException failure =
+                Assert.assertThrows(
+                        IllegalArgumentException.class,
+                        () -> edgeInfo.getAdjacentListUri(AdjListType.ordered_by_source));
+        Assert.assertEquals("childPath must not be null", failure.getMessage());
+    }
+
+    @Test
+    public void testEdgePathsKeepEscapedPrefixesUnchanged() {
+        EdgeInfo edgeInfo = edgeInfoWithAdjacentListPrefix("ordered%20by%20source");
+
+        Assert.assertEquals(
+                URI.create("edge/person_knows_person/ordered%20by%20source/adj_list/part0/chunk0"),
+                edgeInfo.getAdjacentListChunkUri(AdjListType.ordered_by_source, 0, 0));
+    }
+
+    private static EdgeInfo edgeInfoWithAdjacentListPrefix(String prefix) {
+        return new EdgeInfo(
+                "person",
+                "knows",
+                "person",
+                1024,
+                100,
+                100,
+                false,
+                "edge/person_knows_person",
+                "gar/v1",
+                List.of(new AdjacentList(AdjListType.ordered_by_source, FileType.PARQUET, prefix)),
+                List.of(
+                        new PropertyGroup(
+                                List.of(new Property("created", DataType.STRING, false, false)),
+                                FileType.PARQUET,
+                                "created")));
+    }
 }
