@@ -89,8 +89,10 @@ public class PropertyTest {
         Assert.assertEquals(DataType.STRING, stringProp.getDataType());
         TestVerificationUtils.verifyProperty(stringProp, "text", false, true);
 
-        Property listProp = TestDataFactory.createProperty("items", DataType.LIST, false, true);
-        Assert.assertEquals(DataType.LIST, listProp.getDataType());
+        Property listProp =
+                TestDataFactory.createProperty(
+                        "items", DataType.listOf(DataType.STRING), false, true);
+        Assert.assertEquals(DataType.listOf(DataType.STRING), listProp.getDataType());
         TestVerificationUtils.verifyProperty(listProp, "items", false, true);
 
         // Newly added data types
@@ -111,10 +113,10 @@ public class PropertyTest {
         Property primaryNonNull = TestDataFactory.createProperty("id", DataType.INT64, true, false);
         TestVerificationUtils.verifyProperty(primaryNonNull, "id", true, false);
 
-        // Primary and nullable (unusual but valid)
+        // GraphAr primary properties are never nullable.
         Property primaryNull =
                 TestDataFactory.createProperty("optionalId", DataType.INT64, true, true);
-        TestVerificationUtils.verifyProperty(primaryNull, "optionalId", true, true);
+        TestVerificationUtils.verifyProperty(primaryNull, "optionalId", true, false);
 
         // Non-primary and non-nullable (required field)
         Property requiredField =
