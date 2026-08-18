@@ -78,6 +78,7 @@
         <module>java</module>
         <module>spark</module>
         <module>info</module>
+        <module>storage-api</module>
     </modules>
 
     <build>
