@@ -19,6 +19,7 @@
 
 package org.apache.graphar.info;
 
+import java.util.Objects;
 import org.apache.graphar.info.type.Cardinality;
 import org.apache.graphar.info.type.DataType;
 import org.apache.graphar.info.yaml.PropertyYaml;
@@ -77,5 +78,26 @@ public class Property {
 
     public Cardinality getCardinality() {
         return cardinality;
+    }
+
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof Property)) {
+            return false;
+        }
+        Property property = (Property) other;
+        return primary == property.primary
+                && nullable == property.nullable
+                && Objects.equals(name, property.name)
+                && Objects.equals(dataType, property.dataType)
+                && Objects.equals(cardinality, property.cardinality);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(name, dataType, cardinality, primary, nullable);
     }
 }

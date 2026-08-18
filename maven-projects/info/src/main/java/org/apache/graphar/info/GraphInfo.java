@@ -352,14 +352,14 @@ public class GraphInfo {
 
     public VertexInfo getVertexInfoByIndex(int index) {
         if (index < 0 || index >= vertexInfos.size()) {
-            return null;
+            throw new IllegalArgumentException("Vertex info index " + index + " is out of range");
         }
         return vertexInfos.get(index);
     }
 
     public EdgeInfo getEdgeInfoByIndex(int index) {
         if (index < 0 || index >= edgeInfos.size()) {
-            return null;
+            throw new IllegalArgumentException("Edge info index " + index + " is out of range");
         }
         return edgeInfos.get(index);
     }

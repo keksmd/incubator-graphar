@@ -94,11 +94,19 @@ public class VertexInfoTest {
 
         Assert.assertEquals(TestUtil.pg1, vertexInfo.getPropertyGroupByIndex(0));
         Assert.assertEquals(TestUtil.pg2, vertexInfo.getPropertyGroupByIndex(1));
-        Assert.assertNull(vertexInfo.getPropertyGroupByIndex(-1));
-        Assert.assertNull(vertexInfo.getPropertyGroupByIndex(2));
+        Assert.assertThrows(
+                IllegalArgumentException.class, () -> vertexInfo.getPropertyGroupByIndex(-1));
+        Assert.assertThrows(
+                IllegalArgumentException.class, () -> vertexInfo.getPropertyGroupByIndex(2));
         Assert.assertTrue(vertexInfo.removePropertyGroupAsNew(TestUtil.pg3).isEmpty());
 
-        Optional<VertexInfo> withoutFirstGroup = vertexInfo.removePropertyGroupAsNew(TestUtil.pg1);
+        PropertyGroup equalFirstGroup =
+                new PropertyGroup(
+                        TestUtil.pg1.getPropertyList(),
+                        TestUtil.pg1.getFileType(),
+                        TestUtil.pg1.getBaseUri());
+        Optional<VertexInfo> withoutFirstGroup =
+                vertexInfo.removePropertyGroupAsNew(equalFirstGroup);
         Assert.assertTrue(withoutFirstGroup.isPresent());
         Assert.assertEquals(2, vertexInfo.getPropertyGroupNum());
         Assert.assertEquals(1, withoutFirstGroup.get().getPropertyGroupNum());

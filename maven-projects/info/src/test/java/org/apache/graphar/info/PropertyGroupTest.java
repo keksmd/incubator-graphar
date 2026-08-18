@@ -62,6 +62,19 @@ public class PropertyGroupTest {
     }
 
     @Test
+    public void testPropertyGroupValueEquality() {
+        Property equivalentId = new Property("id", DataType.INT64, true, false);
+        Property equivalentName = new Property("name", DataType.STRING, false, true);
+        PropertyGroup equivalentGroup =
+                new PropertyGroup(List.of(equivalentId, equivalentName), FileType.CSV, "test/");
+
+        Assert.assertEquals(idProperty, equivalentId);
+        Assert.assertEquals(idProperty.hashCode(), equivalentId.hashCode());
+        Assert.assertEquals(basicGroup, equivalentGroup);
+        Assert.assertEquals(basicGroup.hashCode(), equivalentGroup.hashCode());
+    }
+
+    @Test
     public void testPropertyGroupWithAllFileTypes() {
         List<Property> properties = Arrays.asList(testProperty);
 
