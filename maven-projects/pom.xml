@@ -79,6 +79,7 @@
         <module>spark</module>
         <module>info</module>
         <module>storage-api</module>
+        <module>storage-local</module>
     </modules>
 
     <build>
