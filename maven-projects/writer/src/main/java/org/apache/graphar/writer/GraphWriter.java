@@ -174,6 +174,87 @@ public final class GraphWriter {
     }
 
     /**
+     * Writes one vertex property chunk of a group, leaving every other chunk of that group
+     * byte-identical.
+     *
+     * <p>A projection under continuous ingest grows by vertices that sort past everything it holds,
+     * and those vertices land in the partition the projection stopped at and in the partitions
+     * after it. Rewriting the whole group to publish them costs the size of the group rather than
+     * the size of the arrival, which is the cost this method exists to avoid: chunk {@code
+     * partition} is the only output it touches.
+     *
+     * <p>The vertex indices written are {@code partition * chunkSize} upwards, so the caller
+     * supplies exactly the rows of that partition, in vertex order. A short chunk is accepted
+     * because the last partition of a group is short by definition; writing one in the middle of a
+     * group is the caller declaring the group ends there. The vertex-count control file is left
+     * untouched - how many vertices a group holds is a property of the group, not of one chunk - so
+     * a growing projection publishes its new count with {@link #writeVertexCount} once every chunk
+     * it added has been written.
+     *
+     * @return the number of rows written into the partition
+     * @throws IllegalStateException when this writer is not in {@link WriteMode#OVERWRITE}, since a
+     *     partition that a projection stopped inside already exists
+     * @throws IllegalArgumentException when the source holds more rows than the chunk size
+     */
+    public long writeVertexPartition(
+            VertexInfo vertexInfo, PropertyGroup propertyGroup, long partition, BatchCursor source)
+            throws IOException {
+        Objects.requireNonNull(vertexInfo, "Vertex info cannot be null.");
+        Objects.requireNonNull(propertyGroup, "Property group cannot be null.");
+        Objects.requireNonNull(source, "Vertex source cannot be null.");
+        requireVertexGroup(vertexInfo, propertyGroup);
+        if (writeMode != WriteMode.OVERWRITE) {
+            throw new IllegalStateException(
+                    "Rewriting an existing vertex partition requires WriteMode.OVERWRITE.");
+        }
+        if (partition < 0) {
+            throw new IllegalArgumentException("Vertex partition must be non-negative.");
+        }
+        Schema sourceSchema = schema(propertyGroup);
+        Schema outputSchema = vertexSchema(propertyGroup);
+        long chunkSize = vertexInfo.getChunkSize();
+        long firstVertex = Math.multiplyExact(partition, chunkSize);
+        List<Row> rows = new ArrayList<>();
+        try {
+            while (source.next()) {
+                RecordBatch batch =
+                        Objects.requireNonNull(source.batch(), "batch cursor returned null");
+                requireSchema(sourceSchema, batch.schema());
+                for (int index = 0; index < batch.rowCount(); index++) {
+                    Row row = batch.row(index);
+                    validatePropertyCardinality(propertyGroup, row);
+                    if (rows.size() == chunkSize) {
+                        throw new IllegalArgumentException(
+                                "Vertex partition source exceeds the chunk size of " + chunkSize);
+                    }
+                    rows.add(vertexRow(firstVertex + rows.size(), row, sourceSchema));
+                }
+            }
+        } finally {
+            source.close();
+        }
+        writeRows(
+                vertexInfo.getPropertyGroupChunkUri(propertyGroup, partition), outputSchema, rows);
+        return rows.size();
+    }
+
+    /**
+     * Publishes how many vertices a type holds, without writing any of them.
+     *
+     * <p>This is the second half of growing a vertex type one partition at a time: the partitions
+     * carry the rows, and this carries the count that makes them readable. Publishing the count
+     * before the last partition is written would expose vertices whose properties are not there
+     * yet, so callers write every partition first.
+     */
+    public void writeVertexCount(VertexInfo vertexInfo, long vertexCount) throws IOException {
+        Objects.requireNonNull(vertexInfo, "Vertex info cannot be null.");
+        if (vertexCount < 0) {
+            throw new IllegalArgumentException("Vertex count must be non-negative.");
+        }
+        writeLong(vertexInfo.getVerticesNumFileUri(), vertexCount);
+    }
+
+    /**
      * Writes validated source-sorted topology as GraphAr ordered-by-source offsets, adjacency
      * chunks, partition edge counts, and source vertex count. The supplied list is intentionally
      * bounded in this MVP so ordering is validated before any output is published.
