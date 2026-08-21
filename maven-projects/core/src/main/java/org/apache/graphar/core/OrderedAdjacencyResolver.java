@@ -27,33 +27,24 @@ import org.apache.graphar.info.type.AdjListType;
 /** Resolves GraphAr ordered adjacency metadata into offset and edge-chunk locations. */
 public final class OrderedAdjacencyResolver {
     private final EdgeInfo edgeInfo;
+    private final AdjacencyOrdering ordering;
     private final AdjListType adjListType;
-    private final long vertexChunkSize;
 
     public OrderedAdjacencyResolver(EdgeInfo edgeInfo, AdjListType adjListType) {
         this.edgeInfo = Objects.requireNonNull(edgeInfo, "Edge info cannot be null.");
-        this.adjListType =
-                Objects.requireNonNull(adjListType, "Adjacency list type cannot be null.");
-        if (!adjListType.isOrdered()) {
-            throw new IllegalArgumentException(
-                    "An ordered adjacency resolver requires an ordered layout: " + adjListType);
-        }
-        if (!edgeInfo.hasAdjListType(adjListType)) {
-            throw new IllegalArgumentException(
-                    "Edge info does not declare adjacency layout: " + adjListType);
-        }
-        this.vertexChunkSize =
-                adjListType == AdjListType.ordered_by_source
-                        ? edgeInfo.getSrcChunkSize()
-                        : edgeInfo.getDstChunkSize();
-        ChunkMath.validateChunkSize(vertexChunkSize);
-        ChunkMath.validateChunkSize(edgeInfo.getChunkSize());
+        this.ordering = AdjacencyOrdering.of(edgeInfo, adjListType);
+        this.adjListType = adjListType;
+    }
+
+    /** Returns the physical ordering this resolver addresses. */
+    public AdjacencyOrdering ordering() {
+        return ordering;
     }
 
     /** Locates the offset pair that the physical reader must fetch for {@code vertexId}. */
     public OffsetLocation locate(long vertexId) {
-        long vertexChunkIndex = ChunkMath.chunkIndex(vertexId, vertexChunkSize);
-        long offsetIndex = ChunkMath.offsetInChunk(vertexId, vertexChunkSize);
+        long vertexChunkIndex = ordering.vertexChunk(vertexId);
+        long offsetIndex = ChunkMath.offsetInChunk(vertexId, ordering.vertexChunkSize());
         URI offsetChunkUri = edgeInfo.getOffsetChunkUri(adjListType, vertexChunkIndex);
         return new OffsetLocation(vertexId, vertexChunkIndex, offsetIndex, offsetChunkUri);
     }
@@ -78,6 +69,6 @@ public final class OrderedAdjacencyResolver {
                 adjListType,
                 offsetLocation,
                 edgeRange,
-                edgeRange.edgeChunks(edgeInfo.getChunkSize()));
+                edgeRange.edgeChunks(ordering.edgeChunkSize()));
     }
 }
