@@ -55,9 +55,17 @@ jobs:
     env:
       SDK_MODULES: storage-api
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: true
+
+      - name: Cache Maven repository
+        uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-sdk-${{ hashFiles('maven-projects/**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-sdk-
 
       - name: Code Format Check
         working-directory: maven-projects
