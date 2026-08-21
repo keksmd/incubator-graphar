@@ -29,6 +29,7 @@ final class LocalPositionOutput implements PositionOutput {
 
     private final OutputStream output;
     private long position;
+    private byte[] transfer;
 
     LocalPositionOutput(OutputStream output) {
         this.output = output;
@@ -48,11 +49,13 @@ final class LocalPositionOutput implements PositionOutput {
             return;
         }
 
-        byte[] buffer = new byte[Math.min(source.remaining(), BUFFER_SIZE)];
+        if (transfer == null) {
+            transfer = new byte[BUFFER_SIZE];
+        }
         while (source.hasRemaining()) {
-            int length = Math.min(source.remaining(), buffer.length);
-            source.get(buffer, 0, length);
-            write(buffer, 0, length);
+            int length = Math.min(source.remaining(), transfer.length);
+            source.get(transfer, 0, length);
+            write(transfer, 0, length);
         }
     }
 
