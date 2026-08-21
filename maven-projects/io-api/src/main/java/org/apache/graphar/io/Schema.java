@@ -41,6 +41,36 @@ public final class Schema {
         return fields;
     }
 
+    /**
+     * Resolves {@code column} to its zero-based physical index by exact name.
+     *
+     * @throws IllegalArgumentException when no field or more than one field carries that name
+     */
+    public int resolve(ColumnRef column) {
+        Objects.requireNonNull(column, "A column reference cannot be null.");
+        int found = -1;
+        for (int index = 0; index < fields.size(); index++) {
+            if (!fields.get(index).name().equals(column.name())) {
+                continue;
+            }
+            if (found >= 0) {
+                throw new IllegalArgumentException(
+                        "Column "
+                                + column
+                                + " is ambiguous: it matches fields "
+                                + found
+                                + " and "
+                                + index
+                                + ".");
+            }
+            found = index;
+        }
+        if (found < 0) {
+            throw new IllegalArgumentException("Column " + column + " is not in the schema.");
+        }
+        return found;
+    }
+
     @Override
     public boolean equals(Object other) {
         return other instanceof Schema && fields.equals(((Schema) other).fields);
