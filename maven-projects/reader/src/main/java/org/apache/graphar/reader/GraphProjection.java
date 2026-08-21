@@ -110,7 +110,9 @@ public final class GraphProjection {
      * <p>A dataset under continuous ingest grows by edges that a full rebuild would derive the
      * unchanged part of again. {@link HeterogeneousCsr#merge} produces the extended projection
      * without reading the dataset; this makes it the served one under the same rule a rebuild
-     * follows, so readers holding the previous snapshot keep answering from it.
+     * follows, so readers holding the previous snapshot keep answering from it. A caller holding a
+     * batch rather than an already derived projection should use {@link #merge} instead, which
+     * derives from the snapshot it replaces.
      *
      * @throws IllegalStateException when a rebuild is in flight, because publishing over it would
      *     decide the order of two projections by which one finished first
@@ -124,6 +126,38 @@ public final class GraphProjection {
         try {
             Snapshot published =
                     new Snapshot(projection, clock.instant(), snapshot.get().generation() + 1L);
+            snapshot.set(published);
+            return published;
+        } finally {
+            refreshing.set(false);
+        }
+    }
+
+    /**
+     * Extends the served projection by {@code batch} and publishes the result, returning the
+     * published snapshot.
+     *
+     * <p>This is the safe form of deriving and publishing. A caller that reads {@link #current()},
+     * merges, and publishes can lose a publication that landed in between, and a batch that
+     * introduces vertices makes that worse than a lost edge: the two projections number their
+     * vertices differently. Here the snapshot the batch is merged into is the one being replaced.
+     *
+     * @throws IllegalStateException when a rebuild is in flight, because publishing over it would
+     *     decide the order of two projections by which one finished first
+     */
+    public Snapshot merge(HeterogeneousCsr.MergeBatch batch) {
+        Objects.requireNonNull(batch, "Merge batch cannot be null.");
+        if (!refreshing.compareAndSet(false, true)) {
+            throw new IllegalStateException(
+                    "A rebuild is in flight; merge into the served projection outside one.");
+        }
+        try {
+            Snapshot base = snapshot.get();
+            Snapshot published =
+                    new Snapshot(
+                            base.projection().merge(batch),
+                            clock.instant(),
+                            base.generation() + 1L);
             snapshot.set(published);
             return published;
         } finally {

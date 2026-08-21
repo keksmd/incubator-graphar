@@ -170,8 +170,40 @@ final class CsrMaterializer {
             int edgeCount,
             long vertexCount,
             CsrDirection direction) {
+        return merge(
+                base,
+                sources,
+                targets,
+                edgeCount,
+                vertexCount,
+                direction,
+                VertexRelocation.IDENTITY);
+    }
+
+    /**
+     * Merges a batch of new edges into an existing projection whose vertices move to new
+     * identifiers in the merged one.
+     *
+     * <p>A projection that concatenates several vertex types assigns each type a contiguous range,
+     * so vertices arriving for one type push every later type along. The base adjacency is still
+     * the answer for the part of the graph that did not change; only the names of its vertices did.
+     * {@code relocation} carries those names over, and because it is order-preserving the base
+     * adjacency of a vertex stays ascending under it, which is what lets the merge stay linear.
+     *
+     * <p>The batch endpoints are already in the merged vertex space, since the caller had to
+     * resolve them through an identifier index that knows the arriving vertices.
+     */
+    static CsrGraph merge(
+            CsrGraph base,
+            int[] sources,
+            int[] targets,
+            int edgeCount,
+            long vertexCount,
+            CsrDirection direction,
+            VertexRelocation relocation) {
         Objects.requireNonNull(base, "Base projection cannot be null.");
         Objects.requireNonNull(direction, "CSR direction cannot be null.");
+        Objects.requireNonNull(relocation, "Vertex relocation cannot be null.");
         long baseVertexCount = base.vertexCount();
         if (vertexCount < baseVertexCount) {
             throw new IllegalArgumentException(
@@ -221,18 +253,23 @@ final class CsrMaterializer {
         int written = 0;
         for (int vertex = 0; vertex < vertexArrayLength - 1; vertex++) {
             offsets[vertex] = written;
-            int existing = vertex < baseVertexCount ? baseOffsets[vertex] : 0;
-            int existingEnd = vertex < baseVertexCount ? baseOffsets[vertex + 1] : 0;
+            int origin = relocation.origin(vertex);
+            boolean carried = origin >= 0 && origin < baseVertexCount;
+            int existing = carried ? baseOffsets[origin] : 0;
+            int existingEnd = carried ? baseOffsets[origin + 1] : 0;
             int arrived = addedOffsets[vertex];
             int arrivedEnd = addedOffsets[vertex + 1];
             while (existing < existingEnd && arrived < arrivedEnd) {
-                destinations[written++] =
-                        baseDestinations[existing] <= added[arrived]
-                                ? baseDestinations[existing++]
-                                : added[arrived++];
+                int neighbor = relocation.relocate(baseDestinations[existing]);
+                if (neighbor <= added[arrived]) {
+                    destinations[written++] = neighbor;
+                    existing++;
+                } else {
+                    destinations[written++] = added[arrived++];
+                }
             }
             while (existing < existingEnd) {
-                destinations[written++] = baseDestinations[existing++];
+                destinations[written++] = relocation.relocate(baseDestinations[existing++]);
             }
             while (arrived < arrivedEnd) {
                 destinations[written++] = added[arrived++];
@@ -459,6 +496,41 @@ final class CsrMaterializer {
             Arrays.sort(destinations, offsets[vertex], offsets[vertex + 1]);
         }
         return new CsrGraph(offsets, destinations);
+    }
+
+    /**
+     * Carries the vertices of a base projection over to the vertex space of a merged one.
+     *
+     * <p>An implementation must be order-preserving: {@code relocate} of a smaller vertex is a
+     * smaller vertex. A merge relies on that to keep an already sorted base adjacency sorted
+     * instead of ordering it again, and produces an adjacency in an arbitrary order without it.
+     */
+    interface VertexRelocation {
+        /** Returned by {@link #origin} for a vertex the base projection did not have. */
+        int ABSENT = -1;
+
+        /** Leaves every vertex where it is, which is the whole mapping when no vertex arrived. */
+        VertexRelocation IDENTITY =
+                new VertexRelocation() {
+                    @Override
+                    public int relocate(int baseVertex) {
+                        return baseVertex;
+                    }
+
+                    @Override
+                    public int origin(int mergedVertex) {
+                        return mergedVertex;
+                    }
+                };
+
+        /** Returns the merged identifier of a vertex the base projection knows. */
+        int relocate(int baseVertex);
+
+        /**
+         * Returns the base identifier a merged vertex came from, or {@link #ABSENT} when the vertex
+         * arrived with the batch and has no adjacency to carry over.
+         */
+        int origin(int mergedVertex);
     }
 
     /** One readable pass over a topology, in the global identifier space of the projection. */

@@ -111,6 +111,52 @@ public class CsrMergeTest {
     }
 
     @Test
+    public void relocatedVerticesCarryTheirAdjacencyIntoTheGrownSpace() throws Exception {
+        for (CsrDirection direction : CsrDirection.values()) {
+            int firstCount = 900;
+            int secondCount = 600;
+            int firstArriving = 120;
+            int secondArriving = 80;
+            long[] bases = {0L, firstCount};
+            long[] grownBases = {0L, firstCount + firstArriving};
+            long[] counts = {firstCount, secondCount};
+            long grownVertices = firstCount + firstArriving + secondCount + secondArriving;
+            CsrMaterializer.VertexRelocation relocation = relocation(bases, counts, grownBases);
+
+            Random random = new Random(SEED);
+            int[] baseSources = new int[4_000];
+            int[] baseTargets = new int[4_000];
+            fill(random, baseSources, baseTargets, firstCount + secondCount);
+            int[] deltaSources = new int[1_500];
+            int[] deltaTargets = new int[1_500];
+            fill(random, deltaSources, deltaTargets, Math.toIntExact(grownVertices));
+
+            CsrGraph base = build(baseSources, baseTargets, firstCount + secondCount, direction);
+            CsrGraph merged =
+                    CsrMaterializer.merge(
+                            base,
+                            deltaSources,
+                            deltaTargets,
+                            deltaSources.length,
+                            grownVertices,
+                            direction,
+                            relocation);
+            CsrGraph rebuilt =
+                    build(
+                            concat(relocate(relocation, baseSources), deltaSources),
+                            concat(relocate(relocation, baseTargets), deltaTargets),
+                            grownVertices,
+                            direction);
+
+            assertEquals(direction.name(), grownVertices, merged.vertexCount());
+            assertEquals(direction.name(), rebuilt.edgeCount(), merged.edgeCount());
+            assertArrayEquals(direction.name(), rebuilt.rawOffsets(), merged.rawOffsets());
+            assertArrayEquals(
+                    direction.name(), rebuilt.rawDestinations(), merged.rawDestinations());
+        }
+    }
+
+    @Test
     public void anEmptyBatchLeavesTheProjectionAsItWas() throws Exception {
         int[] sources = new int[500];
         int[] targets = new int[500];
@@ -182,6 +228,38 @@ public class CsrMergeTest {
                                         2L,
                                         CsrDirection.UNDIRECTED));
         assertTrue(refused.getMessage(), refused.getMessage().contains("cannot lose vertices"));
+    }
+
+    /**
+     * Returns the relocation two vertex types undergo when vertices arrive for both, which is what
+     * a projection concatenating those types hands the merge.
+     */
+    private static CsrMaterializer.VertexRelocation relocation(
+            long[] bases, long[] counts, long[] grownBases) {
+        return new CsrMaterializer.VertexRelocation() {
+            @Override
+            public int relocate(int baseVertex) {
+                int ordinal = baseVertex < bases[1] ? 0 : 1;
+                return Math.toIntExact(grownBases[ordinal] + (baseVertex - bases[ordinal]));
+            }
+
+            @Override
+            public int origin(int mergedVertex) {
+                int ordinal = mergedVertex < grownBases[1] ? 0 : 1;
+                long local = mergedVertex - grownBases[ordinal];
+                return local < counts[ordinal]
+                        ? Math.toIntExact(bases[ordinal] + local)
+                        : CsrMaterializer.VertexRelocation.ABSENT;
+            }
+        };
+    }
+
+    private static int[] relocate(CsrMaterializer.VertexRelocation relocation, int[] vertices) {
+        int[] relocated = new int[vertices.length];
+        for (int position = 0; position < vertices.length; position++) {
+            relocated[position] = relocation.relocate(vertices[position]);
+        }
+        return relocated;
     }
 
     private static void fill(Random random, int[] sources, int[] targets, int vertices) {

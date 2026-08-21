@@ -45,6 +45,7 @@ import java.util.Set;
 public final class HeterogeneousCsr {
     private final String[] types;
     private final long[] bases;
+    private final long[] counts;
     private final Map<String, VertexIdIndex> indexByType;
     private final CsrGraph csr;
     private final CsrDirection direction;
@@ -52,11 +53,13 @@ public final class HeterogeneousCsr {
     private HeterogeneousCsr(
             String[] types,
             long[] bases,
+            long[] counts,
             Map<String, VertexIdIndex> indexByType,
             CsrGraph csr,
             CsrDirection direction) {
         this.types = types;
         this.bases = bases;
+        this.counts = counts;
         this.indexByType = indexByType;
         this.csr = csr;
         this.direction = direction;
@@ -65,6 +68,11 @@ public final class HeterogeneousCsr {
     /** Starts a declaration of the vertex and edge types to merge. */
     public static Builder builder(GraphReader graph) {
         return new Builder(graph);
+    }
+
+    /** Starts a batch of vertices and edges to merge into a projection. */
+    public static MergeBatch batch() {
+        return new MergeBatch();
     }
 
     /** Returns the merged topology in global identifier space. */
@@ -85,8 +93,8 @@ public final class HeterogeneousCsr {
      * were not there when this projection was built. Rebuilding derives the unchanged part again;
      * this merges the arriving edges into the adjacency that already holds it. The endpoints are
      * global identifiers of this projection, which is what {@link #globalIndex} returns, and the
-     * vertex space is unchanged: a batch that introduces new vertices needs an identifier index
-     * that knows them, so it is a rebuild rather than a merge.
+     * vertex space is unchanged. Use {@link #merge(MergeBatch)} for a batch that also introduces
+     * vertices, which is the shape an ingest usually has.
      *
      * <p>The returned projection shares the identifier index of this one and leaves this one
      * untouched, so a caller can publish it while requests are still being answered from here.
@@ -112,7 +120,118 @@ public final class HeterogeneousCsr {
                         edgeCount,
                         csr.vertexCount(),
                         direction);
-        return new HeterogeneousCsr(types, bases, indexByType, merged, direction);
+        return new HeterogeneousCsr(types, bases, counts, indexByType, merged, direction);
+    }
+
+    /**
+     * Returns a projection carrying the edges of this one and everything in {@code batch}, without
+     * reading the dataset again, including the vertices the batch introduces.
+     *
+     * <p>An ingest that only ever adds edges between vertices already indexed is the rare case: in
+     * an identity graph a new user, device, or address arriving is the mass case, and a projection
+     * that could not take one would fall back to a full rebuild exactly when merging is worth most.
+     * A batch names its endpoints by application identifier for that reason, because the global
+     * identifier of an arriving vertex does not exist until this call assigns it.
+     *
+     * <p>Every identifier the batch mentions that no index resolves is an arriving vertex. It takes
+     * the index that follows the ones its type already stores, in the order the batch first
+     * mentions it, which is the numbering an append-only writer gives it in the dataset; a later
+     * rebuild over the grown dataset therefore produces this projection again. Arriving vertices
+     * push the types declared after theirs along, so the vertices this projection already holds get
+     * new global identifiers, and their adjacency is carried over rather than derived again.
+     *
+     * <p>A global identifier is only meaningful within one projection. It was already unstable
+     * across a rebuild, and a merge that grows the vertex space moves it too, so resolve
+     * identifiers against the projection answering the request rather than carrying them across a
+     * publish.
+     *
+     * <p>This projection and its identifier indexes are left untouched, so a caller can publish the
+     * returned one while requests are still being answered from here.
+     *
+     * @throws IllegalArgumentException when the batch names a vertex type this projection did not
+     *     declare
+     */
+    public HeterogeneousCsr merge(MergeBatch batch) {
+        Objects.requireNonNull(batch, "Merge batch cannot be null.");
+        for (String mentionedType : batch.mentionedTypes()) {
+            typeOrdinal(mentionedType);
+        }
+        List<List<String>> arrivingByOrdinal = new ArrayList<>(types.length);
+        long[] grownCounts = new long[types.length];
+        long[] grownBases = new long[types.length];
+        long nextBase = 0;
+        boolean grown = false;
+        for (int ordinal = 0; ordinal < types.length; ordinal++) {
+            VertexIdIndex index = indexByType.get(types[ordinal]);
+            List<String> arriving = new ArrayList<>();
+            for (String identifier : batch.mentionsOf(types[ordinal])) {
+                if (index.lookup(identifier) == VertexIdIndex.ABSENT) {
+                    arriving.add(identifier);
+                }
+            }
+            arrivingByOrdinal.add(arriving);
+            grown |= !arriving.isEmpty();
+            grownBases[ordinal] = nextBase;
+            grownCounts[ordinal] = Math.addExact(counts[ordinal], arriving.size());
+            nextBase = Math.addExact(nextBase, grownCounts[ordinal]);
+        }
+        if (!grown) {
+            grownBases = bases;
+            grownCounts = counts;
+        }
+        Map<String, VertexIdIndex> grownIndexByType = new LinkedHashMap<>();
+        for (int ordinal = 0; ordinal < types.length; ordinal++) {
+            grownIndexByType.put(
+                    types[ordinal],
+                    indexByType
+                            .get(types[ordinal])
+                            .extendedWith(counts[ordinal], arrivingByOrdinal.get(ordinal)));
+        }
+
+        int edgeCount = batch.edgeCount();
+        int[] sources = new int[edgeCount];
+        int[] targets = new int[edgeCount];
+        for (int edge = 0; edge < edgeCount; edge++) {
+            sources[edge] =
+                    resolve(
+                            grownIndexByType,
+                            grownBases,
+                            batch.sourceType(edge),
+                            batch.sourceId(edge));
+            targets[edge] =
+                    resolve(
+                            grownIndexByType,
+                            grownBases,
+                            batch.targetType(edge),
+                            batch.targetId(edge));
+        }
+        CsrGraph merged =
+                CsrMaterializer.merge(
+                        csr,
+                        sources,
+                        targets,
+                        edgeCount,
+                        nextBase,
+                        direction,
+                        grown
+                                ? new TypeRelocation(bases, counts, grownBases)
+                                : CsrMaterializer.VertexRelocation.IDENTITY);
+        return new HeterogeneousCsr(
+                types, grownBases, grownCounts, grownIndexByType, merged, direction);
+    }
+
+    private int resolve(
+            Map<String, VertexIdIndex> indexes, long[] bases, String vertexType, String vertexId) {
+        long local = indexes.get(vertexType).lookup(vertexId);
+        if (local == VertexIdIndex.ABSENT) {
+            throw new IllegalStateException(
+                    "Merged batch names "
+                            + vertexType
+                            + ' '
+                            + vertexId
+                            + ", which stayed unknown.");
+        }
+        return Math.toIntExact(bases[typeOrdinal(vertexType)] + local);
     }
 
     /** Returns the number of vertices across every declared vertex type. */
@@ -193,6 +312,134 @@ public final class HeterogeneousCsr {
         return found >= 0 ? found : -found - 2;
     }
 
+    /**
+     * A batch of vertices and edges to merge into a projection, named by application identifier.
+     *
+     * <p>The batch does not know which of its identifiers the projection already holds, because the
+     * same batch can be merged into projections that were built at different times. It records the
+     * order it first mentions each identifier, and {@link HeterogeneousCsr#merge(MergeBatch)}
+     * decides which of them arrive.
+     *
+     * <p>Instances are not thread-safe; fill one from a single ingest thread.
+     */
+    public static final class MergeBatch {
+        private final Map<String, Set<String>> mentionsByType = new LinkedHashMap<>();
+        private final List<String> sourceTypes = new ArrayList<>();
+        private final List<String> sourceIds = new ArrayList<>();
+        private final List<String> targetTypes = new ArrayList<>();
+        private final List<String> targetIds = new ArrayList<>();
+
+        private MergeBatch() {}
+
+        /**
+         * Adds a vertex, which enters the projection whether or not an edge of this batch names it.
+         */
+        public MergeBatch addVertex(String vertexType, String vertexId) {
+            mention(vertexType, vertexId);
+            return this;
+        }
+
+        /** Adds an edge, and with it both of its endpoints. */
+        public MergeBatch addEdge(String srcType, String srcId, String dstType, String dstId) {
+            mention(srcType, srcId);
+            mention(dstType, dstId);
+            sourceTypes.add(srcType);
+            sourceIds.add(srcId);
+            targetTypes.add(dstType);
+            targetIds.add(dstId);
+            return this;
+        }
+
+        /** Returns the number of edges the batch carries. */
+        public int edgeCount() {
+            return sourceIds.size();
+        }
+
+        /** Returns the number of distinct identifiers the batch mentions. */
+        public int mentionCount() {
+            int mentions = 0;
+            for (Set<String> byType : mentionsByType.values()) {
+                mentions += byType.size();
+            }
+            return mentions;
+        }
+
+        private void mention(String vertexType, String vertexId) {
+            Objects.requireNonNull(vertexType, "Batch vertex type cannot be null.");
+            Objects.requireNonNull(vertexId, "Batch vertex identifier cannot be null.");
+            mentionsByType.computeIfAbsent(vertexType, type -> new LinkedHashSet<>()).add(vertexId);
+        }
+
+        private Set<String> mentionedTypes() {
+            return mentionsByType.keySet();
+        }
+
+        private Set<String> mentionsOf(String vertexType) {
+            return mentionsByType.getOrDefault(vertexType, Set.of());
+        }
+
+        private String sourceType(int edge) {
+            return sourceTypes.get(edge);
+        }
+
+        private String sourceId(int edge) {
+            return sourceIds.get(edge);
+        }
+
+        private String targetType(int edge) {
+            return targetTypes.get(edge);
+        }
+
+        private String targetId(int edge) {
+            return targetIds.get(edge);
+        }
+    }
+
+    /**
+     * Shifts the vertices of a projection into the space the same types occupy once vertices have
+     * arrived for some of them. Each type keeps its range contiguous and in declaration order, so
+     * the mapping is order-preserving, which is what a merge needs to keep an adjacency sorted.
+     */
+    private static final class TypeRelocation implements CsrMaterializer.VertexRelocation {
+        private final long[] bases;
+        private final long[] counts;
+        private final long[] grownBases;
+
+        private TypeRelocation(long[] bases, long[] counts, long[] grownBases) {
+            this.bases = bases;
+            this.counts = counts;
+            this.grownBases = grownBases;
+        }
+
+        @Override
+        public int relocate(int baseVertex) {
+            int ordinal = ordinalIn(bases, baseVertex);
+            return Math.toIntExact(grownBases[ordinal] + (baseVertex - bases[ordinal]));
+        }
+
+        @Override
+        public int origin(int mergedVertex) {
+            int ordinal = ordinalIn(grownBases, mergedVertex);
+            long local = mergedVertex - grownBases[ordinal];
+            return local < counts[ordinal]
+                    ? Math.toIntExact(bases[ordinal] + local)
+                    : CsrMaterializer.VertexRelocation.ABSENT;
+        }
+
+        /**
+         * Returns the type that owns {@code vertex}, skipping past types that declare no vertex and
+         * therefore share the start of the one that follows them.
+         */
+        private static int ordinalIn(long[] starts, long vertex) {
+            int found = Arrays.binarySearch(starts, vertex);
+            int ordinal = found >= 0 ? found : -found - 2;
+            while (ordinal + 1 < starts.length && starts[ordinal + 1] == starts[ordinal]) {
+                ordinal++;
+            }
+            return ordinal;
+        }
+    }
+
     /** Declares the vertex types, edge triplets, and direction of one merged projection. */
     public static final class Builder {
         private final GraphReader graph;
@@ -252,6 +499,7 @@ public final class HeterogeneousCsr {
             }
             String[] types = idPropertyByType.keySet().toArray(new String[0]);
             long[] bases = new long[types.length];
+            long[] counts = new long[types.length];
             Map<String, VertexIdIndex> indexByType = new LinkedHashMap<>();
             long nextBase = 0;
             for (int ordinal = 0; ordinal < types.length; ordinal++) {
@@ -264,7 +512,8 @@ public final class HeterogeneousCsr {
                         idProperty == null
                                 ? VertexIdIndex.build(vertices)
                                 : VertexIdIndex.build(vertices, idProperty));
-                nextBase = Math.addExact(nextBase, vertices.vertexCount());
+                counts[ordinal] = vertices.vertexCount();
+                nextBase = Math.addExact(nextBase, counts[ordinal]);
             }
             long totalVertices = nextBase;
 
@@ -287,7 +536,7 @@ public final class HeterogeneousCsr {
                 CsrGraph scanned =
                         CsrMaterializer.fromScans(
                                 scansOf(readers, types, bases), totalVertices, direction);
-                return new HeterogeneousCsr(types, bases, indexByType, scanned, direction);
+                return new HeterogeneousCsr(types, bases, counts, indexByType, scanned, direction);
             }
             int storedEdges = Math.toIntExact(totalEdges);
             int[] sources = new int[storedEdges];
@@ -319,7 +568,7 @@ public final class HeterogeneousCsr {
             CsrGraph csr =
                     CsrMaterializer.fromEndpoints(
                             sources, targets, storedEdges, totalVertices, direction);
-            return new HeterogeneousCsr(types, bases, indexByType, csr, direction);
+            return new HeterogeneousCsr(types, bases, counts, indexByType, csr, direction);
         }
 
         private List<CsrMaterializer.EndpointScan> scansOf(

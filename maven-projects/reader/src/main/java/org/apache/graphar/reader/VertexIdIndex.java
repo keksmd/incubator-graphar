@@ -120,6 +120,51 @@ public final class VertexIdIndex {
     }
 
     /**
+     * Returns an index that also resolves {@code identifiers}, numbering them from {@code
+     * firstIndex} in the order they are given.
+     *
+     * <p>A dataset under continuous ingest appends vertices, and GraphAr numbers an appended vertex
+     * by its physical row position, so the identifiers a batch introduces take the indexes that
+     * follow the ones already stored. This builds the extended table in one pass over both, because
+     * the table is sized from the vertex count and cannot take an insertion beyond it.
+     *
+     * <p>This index is left untouched, so a projection built on it keeps answering while the
+     * extended one is prepared.
+     *
+     * @throws IllegalArgumentException when an identifier is already resolved by this index or
+     *     repeats another one in {@code identifiers}
+     */
+    public VertexIdIndex extendedWith(long firstIndex, List<String> identifiers) {
+        Objects.requireNonNull(identifiers, "Arriving identifiers cannot be null.");
+        if (firstIndex < 0) {
+            throw new IllegalArgumentException(
+                    "First arriving vertex index cannot be negative: " + firstIndex);
+        }
+        if (identifiers.isEmpty()) {
+            return this;
+        }
+        int grown = Math.addExact(size, identifiers.size());
+        int capacity = capacityFor(grown);
+        String[] grownKeys = new String[capacity];
+        long[] grownIndexes = new long[capacity];
+        for (int slot = 0; slot < keys.length; slot++) {
+            if (keys[slot] != null) {
+                insert(grownKeys, grownIndexes, keys[slot], indexes[slot], idProperty);
+            }
+        }
+        long nextIndex = firstIndex;
+        for (String identifier : identifiers) {
+            insert(
+                    grownKeys,
+                    grownIndexes,
+                    Objects.requireNonNull(identifier, "Arriving identifier cannot be null."),
+                    nextIndex++,
+                    idProperty);
+        }
+        return new VertexIdIndex(idProperty, grownKeys, grownIndexes, grown);
+    }
+
+    /**
      * Returns the dense GraphAr vertex index of the identifier, or {@link #ABSENT} when the
      * identifier belongs to no vertex of this type.
      */

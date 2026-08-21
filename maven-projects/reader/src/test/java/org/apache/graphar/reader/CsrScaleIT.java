@@ -48,6 +48,7 @@ public class CsrScaleIT {
     private static final int MAX_NODES = 50;
     private static final long RESPONSE_BUDGET_MILLIS = 3_000L;
     private static final long DEFAULT_DELTA_EDGES = 1_000_000L;
+    private static final long DEFAULT_DELTA_VERTICES = 200_000L;
     private static final long SEED = 20260813L;
 
     @Test
@@ -324,6 +325,107 @@ public class CsrScaleIT {
                         + rebuildMillis);
 
         assertEquals((edgeCount + deltaEdges) * 2L, rebuilt.edgeCount());
+    }
+
+    @Test
+    public void mergesArrivingVerticesFasterThanItRebuildsTheWholeProjection() throws Exception {
+        long vertexCount = size("GRAPHAR_SCALE_VERTICES", DEFAULT_VERTICES);
+        long edgeCount = size("GRAPHAR_SCALE_EDGES", DEFAULT_EDGES);
+        int edges = Math.toIntExact(edgeCount);
+        int deltaEdges = Math.toIntExact(size("GRAPHAR_SCALE_DELTA_EDGES", DEFAULT_DELTA_EDGES));
+        long arriving = size("GRAPHAR_SCALE_DELTA_VERTICES", DEFAULT_DELTA_VERTICES);
+
+        long firstCount = vertexCount / 2;
+        long secondCount = vertexCount - firstCount;
+        long firstArriving = arriving / 2;
+        long[] bases = {0L, firstCount};
+        long[] counts = {firstCount, secondCount};
+        long[] grownBases = {0L, firstCount + firstArriving};
+        long grownVertices = vertexCount + arriving;
+        CsrMaterializer.VertexRelocation relocation =
+                new CsrMaterializer.VertexRelocation() {
+                    @Override
+                    public int relocate(int baseVertex) {
+                        int ordinal = baseVertex < bases[1] ? 0 : 1;
+                        return Math.toIntExact(grownBases[ordinal] + (baseVertex - bases[ordinal]));
+                    }
+
+                    @Override
+                    public int origin(int mergedVertex) {
+                        int ordinal = mergedVertex < grownBases[1] ? 0 : 1;
+                        long local = mergedVertex - grownBases[ordinal];
+                        return local < counts[ordinal]
+                                ? Math.toIntExact(bases[ordinal] + local)
+                                : CsrMaterializer.VertexRelocation.ABSENT;
+                    }
+                };
+
+        int[] sources = new int[edges];
+        int[] targets = new int[edges];
+        Random random = new Random(SEED);
+        for (int edge = 0; edge < edges; edge++) {
+            sources[edge] = (int) Math.floorMod(random.nextLong(), vertexCount);
+            targets[edge] = (int) Math.floorMod(random.nextLong(), vertexCount);
+        }
+        int[] deltaSources = new int[deltaEdges];
+        int[] deltaTargets = new int[deltaEdges];
+        for (int edge = 0; edge < deltaEdges; edge++) {
+            deltaSources[edge] = (int) Math.floorMod(random.nextLong(), grownVertices);
+            deltaTargets[edge] = (int) Math.floorMod(random.nextLong(), grownVertices);
+        }
+
+        CsrGraph base =
+                CsrMaterializer.fromEndpoints(
+                        sources, targets, edges, vertexCount, CsrDirection.UNDIRECTED);
+
+        long mergeStart = System.nanoTime();
+        CsrGraph merged =
+                CsrMaterializer.merge(
+                        base,
+                        deltaSources,
+                        deltaTargets,
+                        deltaEdges,
+                        grownVertices,
+                        CsrDirection.UNDIRECTED,
+                        relocation);
+        long mergeMillis = (System.nanoTime() - mergeStart) / 1_000_000L;
+        assertEquals(grownVertices, merged.vertexCount());
+        assertEquals(base.edgeCount() + deltaEdges * 2L, merged.edgeCount());
+        merged = null;
+        base = null;
+
+        for (int edge = 0; edge < edges; edge++) {
+            sources[edge] = relocation.relocate(sources[edge]);
+            targets[edge] = relocation.relocate(targets[edge]);
+        }
+        System.arraycopy(deltaSources, 0, sources = grow(sources, deltaEdges), edges, deltaEdges);
+        System.arraycopy(deltaTargets, 0, targets = grow(targets, deltaEdges), edges, deltaEdges);
+        long rebuildStart = System.nanoTime();
+        CsrGraph rebuilt =
+                CsrMaterializer.fromEndpoints(
+                        sources,
+                        targets,
+                        edges + deltaEdges,
+                        grownVertices,
+                        CsrDirection.UNDIRECTED);
+        long rebuildMillis = (System.nanoTime() - rebuildStart) / 1_000_000L;
+
+        System.out.println(
+                "growth: vertices="
+                        + vertexCount
+                        + " arrivingVertices="
+                        + arriving
+                        + " edges="
+                        + edgeCount
+                        + " deltaEdges="
+                        + deltaEdges
+                        + " mergeMillis="
+                        + mergeMillis
+                        + " rebuildMillis="
+                        + rebuildMillis);
+
+        assertEquals((edgeCount + deltaEdges) * 2L, rebuilt.edgeCount());
+        assertEquals(grownVertices, rebuilt.vertexCount());
     }
 
     private static int[] grow(int[] values, int extra) {
