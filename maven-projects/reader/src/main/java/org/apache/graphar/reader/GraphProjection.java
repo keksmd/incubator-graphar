@@ -165,6 +165,37 @@ public final class GraphProjection {
         }
     }
 
+    /**
+     * Runs an operation that rewrites the dataset this projection is built from, and returns its
+     * result.
+     *
+     * <p>A rewrite that replaces part of the dataset in place is not one observable step: while it
+     * runs, the dataset holds output of the rewrite next to output of the write before it. A
+     * rebuild started in that window would read the mixture and publish it. For the whole duration
+     * of the operation this makes {@link #refresh()} a no-op that returns the snapshot in force, so
+     * readers keep being answered from the projection built before the rewrite, and the first
+     * projection that can contain the rewrite is the one built after it returned.
+     *
+     * <p>The operation runs on the calling thread and this class does not decide when the rewrite
+     * becomes visible to readers: publish it with {@link #refresh()} or {@link #publish} after this
+     * returns.
+     *
+     * @throws IllegalStateException when a rebuild is in flight, because it is already reading the
+     *     dataset the operation is about to rewrite
+     */
+    public <T> T rewriteDataset(DatasetRewrite<T> rewrite) throws IOException {
+        Objects.requireNonNull(rewrite, "Dataset rewrite cannot be null.");
+        if (!refreshing.compareAndSet(false, true)) {
+            throw new IllegalStateException(
+                    "A rebuild is in flight; rewrite the dataset outside one.");
+        }
+        try {
+            return rewrite.run();
+        } finally {
+            refreshing.set(false);
+        }
+    }
+
     /** Refreshes only when the served snapshot is older than {@code maxAge}. */
     public Snapshot refreshIfStale(Duration maxAge) throws IOException {
         return isStale(maxAge) ? refresh() : snapshot.get();
@@ -177,6 +208,13 @@ public final class GraphProjection {
             throw new IllegalArgumentException("Maximum age cannot be negative: " + maxAge);
         }
         return snapshot.get().age(clock).compareTo(maxAge) > 0;
+    }
+
+    /** Rewrites the dataset a projection is built from. */
+    @FunctionalInterface
+    public interface DatasetRewrite<T> {
+        /** Performs the rewrite and returns what it produced. */
+        T run() throws IOException;
     }
 
     /** Builds one projection from the dataset. */

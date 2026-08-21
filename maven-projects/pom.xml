@@ -87,6 +87,7 @@
         <module>reader</module>
         <module>delta</module>
         <module>writer</module>
+        <module>compaction</module>
         <module>validator</module>
         <module>compaction-cost</module>
         <module>integration-iceberg</module>

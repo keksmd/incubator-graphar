@@ -42,6 +42,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.OptionalLong;
 import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.stream.Stream;
@@ -302,48 +303,166 @@ public final class GraphWriter {
         int peakRecordsBuffered = 0;
         long total = 0;
         try {
-            spillInput(records, codec, layout, alignedVertexCount, vertexChunkSize, workDirectory);
+            spillInput(
+                    records,
+                    codec,
+                    layout,
+                    alignedVertexCount,
+                    vertexChunkSize,
+                    workDirectory,
+                    OptionalLong.empty());
             for (long partition = 0; partition < partitionCount; partition++) {
-                Path input = partitionPath(workDirectory, partition);
-                RunSet runSet =
-                        sortedRuns(
-                                input,
-                                codec,
-                                layout,
-                                options.maxRecordsInMemory(),
-                                workDirectory,
-                                partition);
-                List<Path> runs = runSet.paths;
-                spillRuns = Math.addExact(spillRuns, runs.size());
-                MergeSet merged =
-                        compactRuns(runs, codec, layout, workDirectory, partition, spillRuns);
-                runs = merged.paths;
-                spillRuns = Math.addExact(spillRuns, merged.createdRuns);
-                peakRecordsBuffered = Math.max(peakRecordsBuffered, runSet.peakRecords);
-                PartitionEdgeWriter partitionWriter =
-                        new PartitionEdgeWriter(
+                PartitionOutcome outcome =
+                        writePartition(
                                 edgeInfo,
                                 layout,
+                                alignedVertexCount,
+                                vertexChunkSize,
                                 partition,
-                                Math.multiplyExact(partition, vertexChunkSize),
-                                Math.min(
-                                        alignedVertexCount,
-                                        Math.multiplyExact(partition + 1, vertexChunkSize)),
                                 propertyGroups,
                                 codec,
-                                workDirectory);
-                mergeRuns(runs, codec, layout, partitionWriter::accept);
-                total = Math.addExact(total, partitionWriter.finish());
-                delete(input);
-                for (Path run : runs) {
-                    delete(run);
-                }
+                                workDirectory,
+                                options.maxRecordsInMemory(),
+                                spillRuns);
+                total = Math.addExact(total, outcome.edgeCount);
+                spillRuns = Math.addExact(spillRuns, outcome.spillRuns);
+                peakRecordsBuffered = Math.max(peakRecordsBuffered, outcome.peakRecords);
             }
             writeLong(edgeInfo.getVerticesNumFileUri(layout), alignedVertexCount);
             return new EdgeWriteStats(total, partitionCount, spillRuns, peakRecordsBuffered);
         } finally {
             deleteTree(workDirectory);
         }
+    }
+
+    /**
+     * Rewrites one vertex-aligned partition of an existing adjacency layout from the complete set
+     * of edges that partition is to hold, and publishes nothing outside it.
+     *
+     * <p>GraphAr keeps offsets, the adjacency chunk sequence, and the edge count of a partition
+     * inside that partition, so recomputing one partition leaves every other partition of the same
+     * layout byte-identical. That is what makes folding accumulated patches for a single chunk back
+     * into the base a bounded operation instead of a full rebuild of the layout.
+     *
+     * <p>The source is drained into bounded local runs in full before the first output chunk is
+     * written, which is what allows the source to be a cursor over the very partition being
+     * rewritten. The layout's vertex-count control file is left untouched, because rewriting a
+     * partition cannot change how many vertices the layout is aligned to.
+     *
+     * @throws IllegalStateException when this writer is not in {@link WriteMode#OVERWRITE}, since
+     *     every output of an existing partition already exists
+     * @throws IllegalArgumentException when a record's aligned endpoint falls outside {@code
+     *     partition}
+     */
+    public EdgeWriteStats writeEdgePartition(
+            EdgeInfo edgeInfo,
+            AdjListType layout,
+            long alignedVertexCount,
+            long partition,
+            Iterable<EdgeRecord> records,
+            EdgeWriteOptions options)
+            throws IOException {
+        Objects.requireNonNull(edgeInfo, "Edge info cannot be null.");
+        Objects.requireNonNull(layout, "Adjacency layout cannot be null.");
+        Objects.requireNonNull(records, "Edge records cannot be null.");
+        Objects.requireNonNull(options, "Edge write options cannot be null.");
+        if (writeMode != WriteMode.OVERWRITE) {
+            throw new IllegalStateException(
+                    "Rewriting an existing edge partition requires WriteMode.OVERWRITE.");
+        }
+        if (!edgeInfo.hasAdjListType(layout)) {
+            throw new IllegalArgumentException(
+                    "Edge info does not declare adjacency layout: " + layout);
+        }
+        if (alignedVertexCount < 0) {
+            throw new IllegalArgumentException("Aligned vertex count must be non-negative.");
+        }
+        requireParquet(edgeInfo.getAdjacentList(layout).getFileType(), "adjacency");
+        long vertexChunkSize =
+                layout.getAlignedBy().equals("src")
+                        ? edgeInfo.getSrcChunkSize()
+                        : edgeInfo.getDstChunkSize();
+        long partitionCount = ChunkMath.chunkCount(alignedVertexCount, vertexChunkSize);
+        if (partition < 0 || partition >= partitionCount) {
+            throw new IllegalArgumentException(
+                    "Edge partition is outside this adjacency layout: " + partition);
+        }
+        List<PropertyGroup> propertyGroups = edgePropertyGroups(edgeInfo);
+        EdgeRecordCodec codec = new EdgeRecordCodec(edgeProperties(edgeInfo));
+        Path workDirectory = Files.createTempDirectory("graphar-edge-partition-");
+        try {
+            spillInput(
+                    records,
+                    codec,
+                    layout,
+                    alignedVertexCount,
+                    vertexChunkSize,
+                    workDirectory,
+                    OptionalLong.of(partition));
+            PartitionOutcome outcome =
+                    writePartition(
+                            edgeInfo,
+                            layout,
+                            alignedVertexCount,
+                            vertexChunkSize,
+                            partition,
+                            propertyGroups,
+                            codec,
+                            workDirectory,
+                            options.maxRecordsInMemory(),
+                            0);
+            return new EdgeWriteStats(outcome.edgeCount, 1, outcome.spillRuns, outcome.peakRecords);
+        } finally {
+            deleteTree(workDirectory);
+        }
+    }
+
+    private PartitionOutcome writePartition(
+            EdgeInfo edgeInfo,
+            AdjListType layout,
+            long alignedVertexCount,
+            long vertexChunkSize,
+            long partition,
+            List<PropertyGroup> propertyGroups,
+            EdgeRecordCodec codec,
+            Path workDirectory,
+            int maxRecordsInMemory,
+            long runSequence)
+            throws IOException {
+        Path input = partitionPath(workDirectory, partition);
+        RunSet runSet =
+                sortedRuns(input, codec, layout, maxRecordsInMemory, workDirectory, partition);
+        List<Path> runs = runSet.paths;
+        long spillRuns = runs.size();
+        MergeSet merged =
+                compactRuns(
+                        runs,
+                        codec,
+                        layout,
+                        workDirectory,
+                        partition,
+                        Math.addExact(runSequence, spillRuns));
+        runs = merged.paths;
+        spillRuns = Math.addExact(spillRuns, merged.createdRuns);
+        PartitionEdgeWriter partitionWriter =
+                new PartitionEdgeWriter(
+                        edgeInfo,
+                        layout,
+                        partition,
+                        Math.multiplyExact(partition, vertexChunkSize),
+                        Math.min(
+                                alignedVertexCount,
+                                Math.multiplyExact(partition + 1, vertexChunkSize)),
+                        propertyGroups,
+                        codec,
+                        workDirectory);
+        mergeRuns(runs, codec, layout, partitionWriter::accept);
+        long edgeCount = partitionWriter.finish();
+        delete(input);
+        for (Path run : runs) {
+            delete(run);
+        }
+        return new PartitionOutcome(edgeCount, spillRuns, runSet.peakRecords);
     }
 
     /**
@@ -367,12 +486,22 @@ public final class GraphWriter {
             AdjListType layout,
             long alignedVertexCount,
             long vertexChunkSize,
-            Path workDirectory)
+            Path workDirectory,
+            OptionalLong onlyPartition)
             throws IOException {
         try (PartitionSpillWriter partitions = new PartitionSpillWriter(workDirectory, codec)) {
             for (EdgeRecord record : records) {
                 validateRecord(codec, layout, alignedVertexCount, record);
-                partitions.write(Math.floorDiv(aligned(record, layout), vertexChunkSize), record);
+                long partition = Math.floorDiv(aligned(record, layout), vertexChunkSize);
+                if (onlyPartition.isPresent() && onlyPartition.getAsLong() != partition) {
+                    throw new IllegalArgumentException(
+                            "Edge record belongs to partition "
+                                    + partition
+                                    + " and not to the rewritten partition "
+                                    + onlyPartition.getAsLong()
+                                    + ".");
+                }
+                partitions.write(partition, record);
             }
         }
     }
@@ -1272,6 +1401,18 @@ public final class GraphWriter {
 
         private RunSet(List<Path> paths, int peakRecords) {
             this.paths = paths;
+            this.peakRecords = peakRecords;
+        }
+    }
+
+    private static final class PartitionOutcome {
+        private final long edgeCount;
+        private final long spillRuns;
+        private final int peakRecords;
+
+        private PartitionOutcome(long edgeCount, long spillRuns, int peakRecords) {
+            this.edgeCount = edgeCount;
+            this.spillRuns = spillRuns;
             this.peakRecords = peakRecords;
         }
     }

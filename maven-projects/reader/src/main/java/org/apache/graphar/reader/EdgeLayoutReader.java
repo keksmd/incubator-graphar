@@ -173,6 +173,56 @@ public final class EdgeLayoutReader {
                 limit);
     }
 
+    /** Returns the number of vertex-aligned partitions this layout is stored in. */
+    public long partitionCount() throws IOException {
+        return ChunkMath.chunkCount(vertexCount(), vertexChunkSize());
+    }
+
+    /** Returns the number of edge rows held by one vertex-aligned partition. */
+    public long partitionEdgeCount(long partition) throws IOException {
+        long[] counts = partitionEdgeCounts(vertexCount());
+        requirePartition(partition, counts.length);
+        return counts[(int) partition];
+    }
+
+    /** Opens a cursor over one whole vertex-aligned partition in physical row order. */
+    public EdgePropertyCursor scanPartition(long partition) throws IOException {
+        return scanPartition(partition, EdgePropertyCursor.allPropertyNames(edgeInfo));
+    }
+
+    /**
+     * Opens a cursor over one whole vertex-aligned partition with only the requested edge
+     * properties, in physical row order.
+     *
+     * <p>GraphAr stores offsets, the adjacency chunk sequence, and the edge count of a partition
+     * inside that partition, which makes a partition the smallest part of a layout that can be
+     * recomputed on its own. The rows this returns in the order it returns them are exactly what
+     * such a recomputation has to reproduce before anything is added to it.
+     */
+    public EdgePropertyCursor scanPartition(long partition, Collection<String> properties)
+            throws IOException {
+        long[] counts = partitionEdgeCounts(vertexCount());
+        requirePartition(partition, counts.length);
+        List<EdgePropertyCursor.Segment> segments = new ArrayList<>();
+        addRange(segments, partition, 0, counts[(int) partition]);
+        return new EdgePropertyCursor(
+                edgeInfo,
+                layout,
+                datasetRoot,
+                physicalReader,
+                segments,
+                null,
+                properties,
+                Long.MAX_VALUE);
+    }
+
+    private static void requirePartition(long partition, int partitionCount) {
+        if (partition < 0 || partition >= partitionCount) {
+            throw new IllegalArgumentException(
+                    "Edge partition is outside this adjacency layout: " + partition);
+        }
+    }
+
     private long[] partitionEdgeCounts(long vertexCount) throws IOException {
         long partitionCount = ChunkMath.chunkCount(vertexCount, vertexChunkSize());
         if (partitionCount > Integer.MAX_VALUE) {
