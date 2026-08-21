@@ -85,6 +85,7 @@
         <module>storage-s3</module>
         <module>core</module>
         <module>reader</module>
+        <module>delta</module>
         <module>writer</module>
         <module>validator</module>
         <module>integration-iceberg</module>
