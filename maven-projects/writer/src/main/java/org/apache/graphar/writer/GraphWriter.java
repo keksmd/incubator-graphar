@@ -255,6 +255,29 @@ public final class GraphWriter {
     }
 
     /**
+     * Publishes how many source vertices an adjacency layout is aligned to.
+     *
+     * <p>{@link #writeEdgeLayout} stamps this once it has written every partition, so a caller that
+     * grows a layout partition by partition has no way to move it. Without the move the reader
+     * keeps aligning to the old count and the partitions added past it are never visited, so this
+     * is the edge-side counterpart of {@link #writeVertexCount}: written last, after the partitions
+     * that the new count makes reachable.
+     */
+    public void writeEdgeVertexCount(EdgeInfo edgeInfo, AdjListType layout, long alignedVertexCount)
+            throws IOException {
+        Objects.requireNonNull(edgeInfo, "Edge info cannot be null.");
+        Objects.requireNonNull(layout, "Adjacency layout cannot be null.");
+        if (!edgeInfo.hasAdjListType(layout)) {
+            throw new IllegalArgumentException(
+                    "Edge info does not declare adjacency layout: " + layout);
+        }
+        if (alignedVertexCount < 0) {
+            throw new IllegalArgumentException("Aligned vertex count must be non-negative.");
+        }
+        writeLong(edgeInfo.getVerticesNumFileUri(layout), alignedVertexCount);
+    }
+
+    /**
      * Writes validated source-sorted topology as GraphAr ordered-by-source offsets, adjacency
      * chunks, partition edge counts, and source vertex count. The supplied list is intentionally
      * bounded in this MVP so ordering is validated before any output is published.
