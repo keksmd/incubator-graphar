@@ -50,9 +50,10 @@ import org.apache.graphar.io.ReadReport;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.ReadResult;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
 import org.apache.graphar.io.RowRange;
 import org.apache.graphar.io.Schema;
+import org.apache.graphar.io.ValueVector;
+import org.apache.graphar.io.VectorRecordBatch;
 import org.apache.graphar.storage.local.LocalStorage;
 import org.junit.Rule;
 import org.junit.Test;
@@ -279,23 +280,35 @@ public class EdgePropertyCursorStreamingTest {
             fields.add(new Field(name, ColumnType.of(ColumnType.Kind.INT64), false));
         }
         Schema schema = new Schema(fields);
-        return new RecordBatch() {
-            @Override
-            public Schema schema() {
-                return schema;
-            }
+        int rowCount = Math.toIntExact(end - start);
+        List<ValueVector> vectors = new ArrayList<>();
+        for (int column = 0; column < fields.size(); column++) {
+            Field field = fields.get(column);
+            String name = request.projection().columns().get(column);
+            vectors.add(
+                    new ValueVector() {
+                        @Override
+                        public Field field() {
+                            return field;
+                        }
 
-            @Override
-            public int rowCount() {
-                return Math.toIntExact(end - start);
-            }
+                        @Override
+                        public int valueCount() {
+                            return rowCount;
+                        }
 
-            @Override
-            public Row row(int index) {
-                long absolute = start + index;
-                return column -> value(request.projection().columns().get(column), absolute);
-            }
-        };
+                        @Override
+                        public boolean isNull(int index) {
+                            return false;
+                        }
+
+                        @Override
+                        public Object getObject(int index) {
+                            return value(name, start + index);
+                        }
+                    });
+        }
+        return new VectorRecordBatch(schema, vectors, rowCount);
     }
 
     private static Object value(String column, long row) {

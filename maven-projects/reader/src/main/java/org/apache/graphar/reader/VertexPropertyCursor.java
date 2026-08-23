@@ -39,7 +39,6 @@ import org.apache.graphar.io.ReadReport;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.ReadResult;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
 import org.apache.graphar.io.RowRange;
 
 /**
@@ -97,30 +96,29 @@ public final class VertexPropertyCursor implements AutoCloseable {
                 }
                 streams = openSegment(segments.get(segmentIndex++));
             }
-            Row leading = streams.groups.get(0).rows.next();
-            if (leading == null) {
+            PropertyStream leading = streams.groups.get(0);
+            if (!leading.rows.next()) {
                 SegmentStreams completed = streams;
                 streams = null;
                 finish(completed);
                 continue;
             }
-            long id = vertexId(leading.value(0));
+            long id = vertexId(leading.rows.value(0));
             Map<String, Object> properties = new LinkedHashMap<>();
-            copyProperties(streams.groups.get(0).projection, leading, properties);
+            copyProperties(leading.projection, leading.rows, properties);
             for (int index = 1; index < streams.groups.size(); index++) {
                 PropertyStream stream = streams.groups.get(index);
-                Row row = stream.rows.next();
-                if (row == null) {
+                if (!stream.rows.next()) {
                     throw new IllegalArgumentException(
                             "Vertex property chunk row count does not match its leading chunk.");
                 }
-                if (vertexId(row.value(0)) != id) {
+                if (vertexId(stream.rows.value(0)) != id) {
                     throw new IllegalArgumentException(
                             "Vertex property groups disagree on the vertex index at row "
                                     + emitted
                                     + '.');
                 }
-                copyProperties(stream.projection, row, properties);
+                copyProperties(stream.projection, stream.rows, properties);
             }
             current = new GraphVertex(id, properties);
             emitted++;
@@ -156,14 +154,14 @@ public final class VertexPropertyCursor implements AutoCloseable {
     }
 
     private static void copyProperties(
-            PropertyProjection projection, Row row, Map<String, Object> target) {
+            PropertyProjection projection, BatchStream rows, Map<String, Object> target) {
         for (int column = 0; column < projection.names.size(); column++) {
-            target.put(projection.names.get(column), row.value(column + 1));
+            target.put(projection.names.get(column), rows.value(column + 1));
         }
     }
 
     private SegmentStreams openSegment(Segment segment) throws IOException {
-        List<RowStream> opened = new ArrayList<>();
+        List<BatchStream> opened = new ArrayList<>();
         try {
             List<PropertyStream> groups = new ArrayList<>();
             for (PropertyProjection projection : propertyProjections) {
@@ -206,7 +204,8 @@ public final class VertexPropertyCursor implements AutoCloseable {
         streams.close();
     }
 
-    private RowStream open(URI uri, List<String> projection, RowRange range, List<RowStream> opened)
+    private BatchStream open(
+            URI uri, List<String> projection, RowRange range, List<BatchStream> opened)
             throws IOException {
         ReadResult result =
                 physicalReader.read(
@@ -215,14 +214,14 @@ public final class VertexPropertyCursor implements AutoCloseable {
                                 .rowRange(range)
                                 .build());
         reports.add(result.report());
-        RowStream rows = new RowStream(result.cursor());
+        BatchStream rows = new BatchStream(result.cursor());
         opened.add(rows);
         return rows;
     }
 
-    private static IOException closeAll(List<RowStream> streams) {
+    private static IOException closeAll(List<BatchStream> streams) {
         IOException failure = null;
-        for (RowStream stream : streams) {
+        for (BatchStream stream : streams) {
             try {
                 stream.close();
             } catch (IOException exception) {
@@ -318,9 +317,9 @@ public final class VertexPropertyCursor implements AutoCloseable {
 
     private static final class PropertyStream {
         private final PropertyProjection projection;
-        private final RowStream rows;
+        private final BatchStream rows;
 
-        private PropertyStream(PropertyProjection projection, RowStream rows) {
+        private PropertyStream(PropertyProjection projection, BatchStream rows) {
             this.projection = projection;
             this.rows = rows;
         }
@@ -335,7 +334,7 @@ public final class VertexPropertyCursor implements AutoCloseable {
 
         private void verifyExhausted() throws IOException {
             for (int index = 1; index < groups.size(); index++) {
-                if (groups.get(index).rows.next() != null) {
+                if (groups.get(index).rows.next()) {
                     throw new IllegalArgumentException(
                             "Vertex property chunk row count does not match its leading chunk.");
                 }
@@ -362,30 +361,38 @@ public final class VertexPropertyCursor implements AutoCloseable {
         }
     }
 
-    private static final class RowStream implements AutoCloseable {
+    private static final class BatchStream implements AutoCloseable {
         private final BatchCursor cursor;
         private RecordBatch batch;
         private int row;
         private boolean exhausted;
 
-        private RowStream(BatchCursor cursor) {
+        private BatchStream(BatchCursor cursor) {
             this.cursor = Objects.requireNonNull(cursor, "Batch cursor cannot be null.");
         }
 
-        private Row next() throws IOException {
+        private boolean next() throws IOException {
             while (!exhausted) {
                 if (batch != null && row < batch.rowCount()) {
-                    return batch.row(row++);
+                    row++;
+                    return true;
                 }
                 if (!cursor.next()) {
                     exhausted = true;
                     batch = null;
-                    return null;
+                    return false;
                 }
                 batch = Objects.requireNonNull(cursor.batch(), "batch cursor returned null");
                 row = 0;
             }
-            return null;
+            return false;
+        }
+
+        private Object value(int column) {
+            if (batch == null || row == 0) {
+                throw new IllegalStateException("No current batch row. Call next() first.");
+            }
+            return batch.column(column).getObject(row - 1);
         }
 
         @Override

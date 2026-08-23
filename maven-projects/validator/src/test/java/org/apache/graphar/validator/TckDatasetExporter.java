@@ -40,8 +40,9 @@ import org.apache.graphar.io.BatchCursor;
 import org.apache.graphar.io.ColumnType;
 import org.apache.graphar.io.Field;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
 import org.apache.graphar.io.Schema;
+import org.apache.graphar.io.ValueVector;
+import org.apache.graphar.io.VectorRecordBatch;
 import org.apache.graphar.io.WriteMode;
 import org.apache.graphar.io.parquet.ParquetPhysicalWriter;
 import org.apache.graphar.storage.local.LocalStorage;
@@ -140,28 +141,35 @@ final class TckDatasetExporter {
     }
 
     private static BatchCursor rows(Schema schema, int count) {
-        List<Row> values = new ArrayList<>();
+        List<Object> values = new ArrayList<>();
         for (int index = 0; index < count; index++) {
             String value = "person-" + index;
-            values.add(column -> value);
+            values.add(value);
         }
-        RecordBatch batch =
-                new RecordBatch() {
+        Field field = schema.fields().get(0);
+        ValueVector vector =
+                new ValueVector() {
                     @Override
-                    public Schema schema() {
-                        return schema;
+                    public Field field() {
+                        return field;
                     }
 
                     @Override
-                    public int rowCount() {
+                    public int valueCount() {
                         return values.size();
                     }
 
                     @Override
-                    public Row row(int index) {
+                    public boolean isNull(int index) {
+                        return values.get(index) == null;
+                    }
+
+                    @Override
+                    public Object getObject(int index) {
                         return values.get(index);
                     }
                 };
+        RecordBatch batch = new VectorRecordBatch(schema, List.of(vector), values.size());
         return new BatchCursor() {
             private boolean available = true;
 

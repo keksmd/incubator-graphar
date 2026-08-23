@@ -200,7 +200,7 @@ public final class OrderedSourceNeighborReader {
             while (cursor.next()) {
                 RecordBatch batch = cursor.batch();
                 for (int index = 0; index < batch.rowCount(); index++) {
-                    Object value = batch.row(index).value(0);
+                    Object value = batch.column(0).getObject(index);
                     if (!(value instanceof Long) || (Long) value < 0) {
                         throw new IllegalArgumentException(
                                 "GraphAr destination IDs must be non-negative INT64 values.");
@@ -222,7 +222,7 @@ public final class OrderedSourceNeighborReader {
             while (closeableCursor.next()) {
                 RecordBatch batch = closeableCursor.batch();
                 for (int index = 0; index < batch.rowCount(); index++) {
-                    Object value = batch.row(index).value(0);
+                    Object value = batch.column(0).getObject(index);
                     if (!(value instanceof Long) || ((Long) value) < 0) {
                         throw new IllegalArgumentException(
                                 "GraphAr offsets must be non-negative INT64 values.");

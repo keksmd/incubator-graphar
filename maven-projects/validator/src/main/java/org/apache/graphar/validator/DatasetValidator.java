@@ -42,7 +42,6 @@ import org.apache.graphar.io.Field;
 import org.apache.graphar.io.PhysicalReader;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
 import org.apache.graphar.io.Schema;
 import org.apache.graphar.storage.InputFile;
 import org.apache.graphar.storage.SeekableInput;
@@ -320,7 +319,7 @@ public final class DatasetValidator {
                                         + describe(batch.schema()));
                     }
                     for (int index = 0; index < batch.rowCount(); index++) {
-                        if (rowCheck != null) rowCheck.check(batch.row(index), uri);
+                        if (rowCheck != null) rowCheck.check(batch, index, uri);
                         rows = Math.addExact(rows, 1);
                     }
                 }
@@ -485,7 +484,7 @@ public final class DatasetValidator {
     }
 
     private interface RowCheck {
-        void check(Row row, URI uri);
+        void check(RecordBatch batch, int rowIndex, URI uri);
     }
 
     private static final class TopologyCheck implements RowCheck {
@@ -514,9 +513,9 @@ public final class DatasetValidator {
         }
 
         @Override
-        public void check(Row row, URI uri) {
-            Object source = row.value(0);
-            Object destination = row.value(1);
+        public void check(RecordBatch batch, int rowIndex, URI uri) {
+            Object source = batch.column(0).getObject(rowIndex);
+            Object destination = batch.column(1).getObject(rowIndex);
             if (!(source instanceof Long) || !(destination instanceof Long)) {
                 report.error("TOPOLOGY_TYPE", uri, "Topology IDs must be INT64 values.");
                 return;
@@ -560,12 +559,12 @@ public final class DatasetValidator {
         }
 
         @Override
-        public void check(Row row, URI uri) {
+        public void check(RecordBatch batch, int rowIndex, URI uri) {
             if (!uri.equals(currentUri)) {
                 currentUri = uri;
                 next = 0;
             }
-            Object value = row.value(0);
+            Object value = batch.column(0).getObject(rowIndex);
             if (!(value instanceof Long)) {
                 report.error(
                         "VERTEX_INDEX_TYPE", uri, "_graphArVertexIndex must be an INT64 value.");
@@ -606,8 +605,8 @@ public final class DatasetValidator {
         }
 
         @Override
-        public void check(Row row, URI uri) {
-            Object value = row.value(0);
+        public void check(RecordBatch batch, int rowIndex, URI uri) {
+            Object value = batch.column(0).getObject(rowIndex);
             if (!(value instanceof Long)) {
                 report.error("OFFSET_TYPE", uri, "Offsets must be INT64 values.");
                 return;

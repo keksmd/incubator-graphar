@@ -90,7 +90,7 @@ public final class NeighborCursor implements AutoCloseable {
         }
         while (true) {
             if (batch != null && rowIndex < batch.rowCount()) {
-                Object value = batch.row(rowIndex++).value(0);
+                Object value = batch.column(0).getObject(rowIndex++);
                 if (!(value instanceof Long) || ((Long) value) < 0) {
                     throw new IllegalArgumentException(
                             "GraphAr destination IDs must be non-negative INT64 values.");

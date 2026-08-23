@@ -40,7 +40,6 @@ import org.apache.graphar.io.ReadReport;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.ReadResult;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
 import org.apache.graphar.io.RowRange;
 
 /**
@@ -105,8 +104,7 @@ public final class EdgePropertyCursor implements AutoCloseable {
                 }
                 streams = openSegment(segments.get(segmentIndex++));
             }
-            Row topology = streams.topology.next();
-            if (topology == null) {
+            if (!streams.topology.next()) {
                 SegmentStreams completed = streams;
                 streams = null;
                 finish(completed);
@@ -114,20 +112,20 @@ public final class EdgePropertyCursor implements AutoCloseable {
             }
             Map<String, Object> properties = new LinkedHashMap<>();
             for (int index = 0; index < streams.properties.size(); index++) {
-                Row propertyRow = streams.properties.get(index).rows.next();
-                if (propertyRow == null) {
+                PropertyStream property = streams.properties.get(index);
+                if (!property.rows.next()) {
                     throw new IllegalArgumentException(
                             "Edge property chunk row count does not match its topology chunk.");
                 }
-                List<String> names = streams.properties.get(index).projection.names;
+                List<String> names = property.projection.names;
                 for (int column = 0; column < names.size(); column++) {
-                    properties.put(names.get(column), propertyRow.value(column));
+                    properties.put(names.get(column), property.rows.value(column));
                 }
             }
             GraphEdge candidate =
                     new GraphEdge(
-                            id(topology.value(0), "source"),
-                            id(topology.value(1), "destination"),
+                            id(streams.topology.value(0), "source"),
+                            id(streams.topology.value(1), "destination"),
                             properties);
             if (selectedAlignedVertex == null || aligned(candidate) == selectedAlignedVertex) {
                 current = candidate;
@@ -165,9 +163,9 @@ public final class EdgePropertyCursor implements AutoCloseable {
     }
 
     private SegmentStreams openSegment(Segment segment) throws IOException {
-        List<RowStream> opened = new ArrayList<>();
+        List<BatchStream> opened = new ArrayList<>();
         try {
-            RowStream topology =
+            BatchStream topology =
                     open(
                             DatasetUris.resolve(
                                     datasetRoot,
@@ -217,7 +215,8 @@ public final class EdgePropertyCursor implements AutoCloseable {
         streams.close();
     }
 
-    private RowStream open(URI uri, List<String> projection, RowRange range, List<RowStream> opened)
+    private BatchStream open(
+            URI uri, List<String> projection, RowRange range, List<BatchStream> opened)
             throws IOException {
         ReadResult result =
                 physicalReader.read(
@@ -226,14 +225,14 @@ public final class EdgePropertyCursor implements AutoCloseable {
                                 .rowRange(range)
                                 .build());
         reports.add(result.report());
-        RowStream rows = new RowStream(result.cursor());
+        BatchStream rows = new BatchStream(result.cursor());
         opened.add(rows);
         return rows;
     }
 
-    private static IOException closeAll(List<RowStream> streams) {
+    private static IOException closeAll(List<BatchStream> streams) {
         IOException failure = null;
-        for (RowStream stream : streams) {
+        for (BatchStream stream : streams) {
             try {
                 stream.close();
             } catch (IOException exception) {
@@ -329,26 +328,26 @@ public final class EdgePropertyCursor implements AutoCloseable {
 
     private static final class PropertyStream {
         private final PropertyProjection projection;
-        private final RowStream rows;
+        private final BatchStream rows;
 
-        private PropertyStream(PropertyProjection projection, RowStream rows) {
+        private PropertyStream(PropertyProjection projection, BatchStream rows) {
             this.projection = projection;
             this.rows = rows;
         }
     }
 
     private static final class SegmentStreams implements AutoCloseable {
-        private final RowStream topology;
+        private final BatchStream topology;
         private final List<PropertyStream> properties;
 
-        private SegmentStreams(RowStream topology, List<PropertyStream> properties) {
+        private SegmentStreams(BatchStream topology, List<PropertyStream> properties) {
             this.topology = topology;
             this.properties = List.copyOf(properties);
         }
 
         private void verifyExhausted() throws IOException {
             for (PropertyStream property : properties) {
-                if (property.rows.next() != null) {
+                if (property.rows.next()) {
                     throw new IllegalArgumentException(
                             "Edge property chunk row count does not match its topology chunk.");
                 }
@@ -380,30 +379,38 @@ public final class EdgePropertyCursor implements AutoCloseable {
         }
     }
 
-    private static final class RowStream implements AutoCloseable {
+    private static final class BatchStream implements AutoCloseable {
         private final BatchCursor cursor;
         private RecordBatch batch;
         private int row;
         private boolean exhausted;
 
-        private RowStream(BatchCursor cursor) {
+        private BatchStream(BatchCursor cursor) {
             this.cursor = Objects.requireNonNull(cursor, "Batch cursor cannot be null.");
         }
 
-        private Row next() throws IOException {
+        private boolean next() throws IOException {
             while (!exhausted) {
                 if (batch != null && row < batch.rowCount()) {
-                    return batch.row(row++);
+                    row++;
+                    return true;
                 }
                 if (!cursor.next()) {
                     exhausted = true;
                     batch = null;
-                    return null;
+                    return false;
                 }
                 batch = Objects.requireNonNull(cursor.batch(), "Batch cursor returned null batch.");
                 row = 0;
             }
-            return null;
+            return false;
+        }
+
+        private Object value(int column) {
+            if (batch == null || row == 0) {
+                throw new IllegalStateException("No current batch row. Call next() first.");
+            }
+            return batch.column(column).getObject(row - 1);
         }
 
         @Override

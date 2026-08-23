@@ -95,8 +95,8 @@ public final class EdgeCursor implements AutoCloseable {
         }
         while (true) {
             if (batch != null && rowIndex < batch.rowCount()) {
-                Object sourceValue = batch.row(rowIndex).value(0);
-                Object destinationValue = batch.row(rowIndex).value(1);
+                Object sourceValue = batch.column(0).getObject(rowIndex);
+                Object destinationValue = batch.column(1).getObject(rowIndex);
                 rowIndex++;
                 source = nonNegativeId(sourceValue, "source");
                 destination = nonNegativeId(destinationValue, "destination");

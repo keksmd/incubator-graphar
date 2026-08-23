@@ -255,7 +255,7 @@ public final class EdgeLayoutReader {
             while (cursor.next()) {
                 RecordBatch batch = cursor.batch();
                 for (int row = 0; row < batch.rowCount(); row++) {
-                    Object value = batch.row(row).value(0);
+                    Object value = batch.column(0).getObject(row);
                     if (!(value instanceof Long) || (Long) value < 0) {
                         throw new IllegalArgumentException(
                                 "GraphAr offsets must be non-negative INT64 values.");
