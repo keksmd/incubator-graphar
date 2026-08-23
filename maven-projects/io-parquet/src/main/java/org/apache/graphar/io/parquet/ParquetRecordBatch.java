@@ -19,33 +19,45 @@
 
 package org.apache.graphar.io.parquet;
 
+import java.util.ArrayList;
 import java.util.List;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
 import org.apache.graphar.io.Schema;
+import org.apache.graphar.io.ValueVector;
+import org.apache.graphar.io.VectorRecordBatch;
 
-/** Immutable rows materialized from one Parquet row group. */
+/** Immutable vectors materialized from one Parquet row group. */
 final class ParquetRecordBatch implements RecordBatch {
-    private final Schema schema;
-    private final List<ParquetRow> rows;
+    private final VectorRecordBatch delegate;
 
-    ParquetRecordBatch(Schema schema, List<ParquetRow> rows) {
-        this.schema = schema;
-        this.rows = List.copyOf(rows);
+    ParquetRecordBatch(Schema schema, List<? extends List<?>> columns, int rowCount) {
+        if (schema.fields().size() != columns.size()) {
+            throw new IllegalArgumentException("Parquet batch vectors do not match schema.");
+        }
+        List<ValueVector> vectors = new ArrayList<>(columns.size());
+        for (int index = 0; index < columns.size(); index++) {
+            vectors.add(new ParquetValueVector(schema.fields().get(index), columns.get(index)));
+        }
+        this.delegate = new VectorRecordBatch(schema, vectors, rowCount);
     }
 
     @Override
     public Schema schema() {
-        return schema;
+        return delegate.schema();
     }
 
     @Override
     public int rowCount() {
-        return rows.size();
+        return delegate.rowCount();
     }
 
     @Override
-    public Row row(int index) {
-        return rows.get(index);
+    public int columnCount() {
+        return delegate.columnCount();
+    }
+
+    @Override
+    public ValueVector column(int index) {
+        return delegate.column(index);
     }
 }

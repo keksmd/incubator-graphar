@@ -42,17 +42,7 @@ import org.junit.Test;
 public class ParquetPhysicalReaderFixtureTest {
     @Test
     public void physicallyAppliesProjectedRangeFromLdbcParquetFixture() throws IOException {
-        Path fixture =
-                Path.of(
-                        "..",
-                        "..",
-                        "testing",
-                        "ldbc_sample",
-                        "parquet",
-                        "vertex",
-                        "person",
-                        "firstName_lastName_gender",
-                        "chunk0");
+        Path fixture = fixture();
         ReadRequest request =
                 ReadRequest.builder(fixture.toUri())
                         .projection(Projection.of(List.of("firstName")))
@@ -74,17 +64,7 @@ public class ParquetPhysicalReaderFixtureTest {
 
     @Test
     public void rejectsFiltersUntilTheyCanBeAppliedPhysically() {
-        Path fixture =
-                Path.of(
-                        "..",
-                        "..",
-                        "testing",
-                        "ldbc_sample",
-                        "parquet",
-                        "vertex",
-                        "person",
-                        "firstName_lastName_gender",
-                        "chunk0");
+        Path fixture = fixture();
         ReadRequest request =
                 ReadRequest.builder(fixture.toUri())
                         .filters(
@@ -111,12 +91,26 @@ public class ParquetPhysicalReaderFixtureTest {
                 RecordBatch batch = cursor.batch();
                 assertEquals(1, batch.schema().fields().size());
                 assertEquals("firstName", batch.schema().fields().get(0).name());
+                assertEquals(1, batch.columnCount());
                 for (int index = 0; index < batch.rowCount(); index++) {
-                    firstNames.add((String) batch.row(index).value(0));
+                    firstNames.add((String) batch.column(0).getObject(index));
                 }
             }
             assertFalse(cursor.next());
         }
         return firstNames;
+    }
+
+    private static Path fixture() {
+        String testData = System.getenv("GAR_TEST_DATA");
+        Path root = testData == null ? Path.of("..", "..", "testing") : Path.of(testData);
+        return root.resolve(
+                Path.of(
+                        "ldbc_sample",
+                        "parquet",
+                        "vertex",
+                        "person",
+                        "firstName_lastName_gender",
+                        "chunk0"));
     }
 }

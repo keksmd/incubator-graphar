@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import org.apache.graphar.io.BatchCursor;
@@ -30,8 +31,8 @@ import org.apache.graphar.io.ColumnType;
 import org.apache.graphar.io.Field;
 import org.apache.graphar.io.PhysicalWriter;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
 import org.apache.graphar.io.Schema;
+import org.apache.graphar.io.ValueVector;
 import org.apache.graphar.io.WriteMode;
 import org.apache.graphar.io.WriteRequest;
 import org.apache.graphar.storage.Storage;
@@ -62,6 +63,10 @@ public final class ParquetPhysicalWriter implements PhysicalWriter {
     public void write(WriteRequest request, BatchCursor batches) throws IOException {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(batches, "batches");
+        if (request.mode() == WriteMode.APPEND) {
+            throw new UnsupportedOperationException(
+                    "ParquetPhysicalWriter cannot append to an existing Parquet file.");
+        }
         MessageType parquetSchema = parquetSchema(request.schema());
         ParquetFileWriter.Mode mode =
                 request.mode() == WriteMode.CREATE_NEW
@@ -79,8 +84,9 @@ public final class ParquetPhysicalWriter implements PhysicalWriter {
                 RecordBatch batch =
                         Objects.requireNonNull(batches.batch(), "batch cursor returned null");
                 requireSchema(request.schema(), batch.schema());
+                List<ValueVector> columns = requireColumns(request.schema(), batch);
                 for (int rowIndex = 0; rowIndex < batch.rowCount(); rowIndex++) {
-                    writer.write(toGroup(groups, request.schema(), batch.row(rowIndex)));
+                    writer.write(toGroup(groups, request.schema(), columns, rowIndex));
                 }
             }
         } finally {
@@ -178,21 +184,45 @@ public final class ParquetPhysicalWriter implements PhysicalWriter {
         for (int index = 0; index < expectedFields.size(); index++) {
             Field left = expectedFields.get(index);
             Field right = actualFields.get(index);
-            if (!left.name().equals(right.name())
-                    || !left.type().equals(right.type())
-                    || left.nullable() != right.nullable()) {
+            if (!left.equals(right)) {
                 throw new IllegalArgumentException(
                         "Record batch schema does not match write request.");
             }
         }
     }
 
-    private static Group toGroup(SimpleGroupFactory groups, Schema schema, Row row) {
+    private static List<ValueVector> requireColumns(Schema schema, RecordBatch batch) {
+        if (batch.columnCount() != schema.fields().size()) {
+            throw new IllegalArgumentException("Record batch vectors do not match write request.");
+        }
+        List<ValueVector> columns = new ArrayList<>(batch.columnCount());
+        for (int index = 0; index < batch.columnCount(); index++) {
+            ValueVector column =
+                    Objects.requireNonNull(
+                            batch.column(index), "record batch vector cannot be null");
+            if (!schema.fields().get(index).equals(column.field())
+                    || column.valueCount() != batch.rowCount()) {
+                throw new IllegalArgumentException(
+                        "Record batch vectors do not match write request.");
+            }
+            columns.add(column);
+        }
+        return columns;
+    }
+
+    private static Group toGroup(
+            SimpleGroupFactory groups, Schema schema, List<ValueVector> columns, int rowIndex) {
         Group group = groups.newGroup();
         for (int index = 0; index < schema.fields().size(); index++) {
             Field field = schema.fields().get(index);
-            Object value = row.value(index);
-            if (value == null) {
+            ValueVector column = columns.get(index);
+            boolean nullValue = column.isNull(rowIndex);
+            Object value = column.getObject(rowIndex);
+            if (nullValue != (value == null)) {
+                throw new IllegalArgumentException(
+                        "Vector nullness does not match its value: " + field.name());
+            }
+            if (nullValue) {
                 if (!field.nullable()) {
                     throw new IllegalArgumentException("Required field is null: " + field.name());
                 }

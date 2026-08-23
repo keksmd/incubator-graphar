@@ -21,6 +21,7 @@ package org.apache.graphar.io.parquet;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
@@ -98,6 +99,31 @@ public class ParquetPhysicalWriterOffsetIndexTest {
         }
     }
 
+    @Test
+    public void rejectsAppendRatherThanSilentlyReplacingAnExistingFile() throws Exception {
+        Path directory = Files.createTempDirectory("graphar-parquet-append-");
+        Path file = directory.resolve("topology.parquet");
+        LocalStorage storage = new LocalStorage();
+        URI uri = file.toUri();
+        try {
+            ParquetPhysicalWriter writer = new ParquetPhysicalWriter(storage);
+            writer.write(
+                    new WriteRequest(uri, TOPOLOGY_SCHEMA, WriteMode.CREATE_NEW),
+                    topologyBatches());
+
+            assertThrows(
+                    UnsupportedOperationException.class,
+                    () ->
+                            writer.write(
+                                    new WriteRequest(uri, TOPOLOGY_SCHEMA, WriteMode.APPEND),
+                                    topologyBatches()));
+            assertOffsetIndexes(storage, uri);
+        } finally {
+            Files.deleteIfExists(file);
+            Files.deleteIfExists(directory);
+        }
+    }
+
     private static void assertOffsetIndexes(LocalStorage storage, URI uri) throws IOException {
         try (ParquetFileReader fileReader =
                 ParquetFileReader.open(new ParquetInputFile(storage.inputFile(uri)))) {
@@ -115,11 +141,16 @@ public class ParquetPhysicalWriterOffsetIndexTest {
     }
 
     private static BatchCursor topologyBatches() {
-        List<ParquetRow> rows = new ArrayList<>();
+        List<Object> sources = new ArrayList<>();
+        List<Object> destinations = new ArrayList<>();
         for (long index = 0; index < 4096; index++) {
-            rows.add(new ParquetRow(new Object[] {index / 64, 10000L + index}));
+            sources.add(index / 64);
+            destinations.add(10000L + index);
         }
-        return new ListBatchCursor(List.of(new ParquetRecordBatch(TOPOLOGY_SCHEMA, rows)));
+        return new ListBatchCursor(
+                List.of(
+                        new ParquetRecordBatch(
+                                TOPOLOGY_SCHEMA, List.of(sources, destinations), 4096)));
     }
 
     private static List<Long> destinations(ReadResult result) throws IOException {
@@ -128,7 +159,7 @@ public class ParquetPhysicalWriterOffsetIndexTest {
             while (cursor.next()) {
                 RecordBatch batch = cursor.batch();
                 for (int index = 0; index < batch.rowCount(); index++) {
-                    destinations.add((Long) batch.row(index).value(0));
+                    destinations.add((Long) batch.column(0).getObject(index));
                 }
             }
         }

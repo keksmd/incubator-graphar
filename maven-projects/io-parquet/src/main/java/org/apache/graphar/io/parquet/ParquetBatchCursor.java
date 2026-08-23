@@ -107,17 +107,23 @@ final class ParquetBatchCursor implements BatchCursor {
                 }
                 int batchSize =
                         (int) Math.min(Math.min(rowsRemainingInGroup, BATCH_ROWS), limit - emitted);
-                List<ParquetRow> matched = new ArrayList<>(batchSize);
+                List<List<Object>> columns = new ArrayList<>(outputIndexes.length);
+                for (int index = 0; index < outputIndexes.length; index++) {
+                    columns.add(new ArrayList<>(batchSize));
+                }
                 for (int index = 0; index < batchSize; index++) {
                     Group group = rows.read();
-                    matched.add(new ParquetRow(project(values(group))));
+                    Object[] projected = project(values(group));
+                    for (int column = 0; column < projected.length; column++) {
+                        columns.get(column).add(projected[column]);
+                    }
                     emitted++;
                     rowsRemainingInGroup--;
                 }
                 if (rowsRemainingInGroup == 0) {
                     closePages();
                 }
-                current = new ParquetRecordBatch(outputSchema, matched);
+                current = new ParquetRecordBatch(outputSchema, columns, batchSize);
                 if (emitted == limit) exhausted = true;
                 return true;
             }

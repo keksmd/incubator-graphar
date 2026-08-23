@@ -128,10 +128,9 @@ public class PhysicalReaderContractTest {
                     }
                 }
                 for (int index = 0; index < batch.rowCount(); index++) {
-                    Row row = batch.row(index);
                     List<Object> values = new ArrayList<>();
-                    for (int column = 0; column < batch.schema().fields().size(); column++) {
-                        values.add(row.value(column));
+                    for (int column = 0; column < batch.columnCount(); column++) {
+                        values.add(batch.column(column).getObject(index));
                     }
                     rows.add(List.copyOf(values));
                 }
@@ -220,7 +219,7 @@ public class PhysicalReaderContractTest {
             }
             return new ReadResult(
                     request,
-                    new SingleBatchCursor(new ListRecordBatch(OUTPUT_SCHEMA, projected)),
+                    new SingleBatchCursor(vectorBatch(OUTPUT_SCHEMA, projected)),
                     new ReadReport(applied, declined));
         }
 
@@ -240,29 +239,50 @@ public class PhysicalReaderContractTest {
         }
     }
 
-    private static final class ListRecordBatch implements RecordBatch {
-        private final Schema schema;
-        private final List<List<Object>> rows;
+    private static RecordBatch vectorBatch(Schema schema, List<List<Object>> rows) {
+        List<List<Object>> columns = new ArrayList<>(schema.fields().size());
+        for (int index = 0; index < schema.fields().size(); index++) {
+            columns.add(new ArrayList<>());
+        }
+        for (List<Object> row : rows) {
+            for (int index = 0; index < columns.size(); index++) {
+                columns.get(index).add(row.get(index));
+            }
+        }
+        List<ValueVector> vectors = new ArrayList<>(columns.size());
+        for (int index = 0; index < columns.size(); index++) {
+            vectors.add(new ListVector(schema.fields().get(index), columns.get(index)));
+        }
+        return new VectorRecordBatch(schema, vectors, rows.size());
+    }
 
-        private ListRecordBatch(Schema schema, List<List<Object>> rows) {
-            this.schema = schema;
-            this.rows = List.copyOf(rows);
+    private static final class ListVector implements ValueVector {
+        private final Field field;
+        private final List<Object> values;
+
+        private ListVector(Field field, List<Object> values) {
+            this.field = field;
+            this.values = List.copyOf(values);
         }
 
         @Override
-        public Schema schema() {
-            return schema;
+        public Field field() {
+            return field;
         }
 
         @Override
-        public int rowCount() {
-            return rows.size();
+        public int valueCount() {
+            return values.size();
         }
 
         @Override
-        public Row row(int index) {
-            List<Object> values = rows.get(index);
-            return values::get;
+        public boolean isNull(int index) {
+            return values.get(index) == null;
+        }
+
+        @Override
+        public Object getObject(int index) {
+            return values.get(index);
         }
     }
 
