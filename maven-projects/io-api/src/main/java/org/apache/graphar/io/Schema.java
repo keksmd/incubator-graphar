@@ -20,10 +20,8 @@
 package org.apache.graphar.io;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 
 /** An ordered, immutable mapping of physical batch columns to neutral field definitions. */
 public final class Schema {
@@ -32,14 +30,8 @@ public final class Schema {
     public Schema(List<Field> fields) {
         Objects.requireNonNull(fields, "Schema fields cannot be null.");
         List<Field> copy = new ArrayList<>(fields.size());
-        Set<String> names = new HashSet<>();
         for (Field field : fields) {
-            Field nonNullField = Objects.requireNonNull(field, "A schema field cannot be null.");
-            if (!names.add(nonNullField.name())) {
-                throw new IllegalArgumentException(
-                        "Schema contains duplicate field: " + nonNullField.name());
-            }
-            copy.add(nonNullField);
+            copy.add(Objects.requireNonNull(field, "A schema field cannot be null."));
         }
         this.fields = List.copyOf(copy);
     }

@@ -19,14 +19,17 @@
 
 package org.apache.graphar.io;
 
-/** A format-neutral, finite group of rows sharing one schema. */
+/** A format-neutral, finite set of same-length vectors sharing one schema. */
 public interface RecordBatch {
-    /** Returns the schema shared by every row in this batch. */
+    /** Returns the schema that defines the vectors in physical column order. */
     Schema schema();
 
     /** Returns the number of rows in this batch. */
     int rowCount();
 
-    /** Returns the row at zero-based {@code index}. */
-    Row row(int index);
+    /** Returns the number of vectors in this batch. */
+    int columnCount();
+
+    /** Returns the vector at zero-based physical {@code index}. */
+    ValueVector column(int index);
 }
