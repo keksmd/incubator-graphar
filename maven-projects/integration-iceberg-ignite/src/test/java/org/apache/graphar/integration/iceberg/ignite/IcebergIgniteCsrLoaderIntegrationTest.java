@@ -39,6 +39,8 @@ import org.apache.graphar.io.ColumnType;
 import org.apache.graphar.io.Field;
 import org.apache.graphar.io.RecordBatch;
 import org.apache.graphar.io.Schema;
+import org.apache.graphar.io.ValueVector;
+import org.apache.graphar.io.VectorRecordBatch;
 import org.apache.graphar.io.WriteMode;
 import org.apache.graphar.io.WriteRequest;
 import org.apache.graphar.io.parquet.ParquetPhysicalWriter;
@@ -211,7 +213,7 @@ public class IcebergIgniteCsrLoaderIntegrationTest {
         new ParquetPhysicalWriter(storage)
                 .write(
                         new WriteRequest(uri, TOPOLOGY_SCHEMA, WriteMode.CREATE_NEW),
-                        new SingleBatchCursor(new Rows(rows)));
+                        new SingleBatchCursor(batch(rows)));
         table.newAppend()
                 .appendFile(
                         DataFiles.builder(table.spec())
@@ -288,7 +290,7 @@ public class IcebergIgniteCsrLoaderIntegrationTest {
         }
     }
 
-    private static final class TopologyRow implements org.apache.graphar.io.Row {
+    private static final class TopologyRow {
         private final long source;
         private final long destination;
 
@@ -296,33 +298,50 @@ public class IcebergIgniteCsrLoaderIntegrationTest {
             this.source = source;
             this.destination = destination;
         }
-
-        @Override
-        public Object value(int index) {
-            return index == 0 ? source : destination;
-        }
     }
 
-    private static final class Rows implements RecordBatch {
-        private final List<TopologyRow> rows;
+    private static RecordBatch batch(List<TopologyRow> rows) {
+        List<Object> sources = new ArrayList<>(rows.size());
+        List<Object> destinations = new ArrayList<>(rows.size());
+        for (TopologyRow row : rows) {
+            sources.add(row.source);
+            destinations.add(row.destination);
+        }
+        return new VectorRecordBatch(
+                TOPOLOGY_SCHEMA,
+                List.of(
+                        new Values(TOPOLOGY_SCHEMA.fields().get(0), sources),
+                        new Values(TOPOLOGY_SCHEMA.fields().get(1), destinations)),
+                rows.size());
+    }
 
-        private Rows(List<TopologyRow> rows) {
-            this.rows = rows;
+    private static final class Values implements ValueVector {
+        private final Field field;
+        private final List<Object> values;
+
+        private Values(Field field, List<Object> values) {
+            this.field = field;
+            this.values = List.copyOf(values);
         }
 
         @Override
-        public Schema schema() {
-            return TOPOLOGY_SCHEMA;
+        public Field field() {
+            return field;
         }
 
         @Override
-        public int rowCount() {
-            return rows.size();
+        public int valueCount() {
+            return values.size();
         }
 
         @Override
-        public org.apache.graphar.io.Row row(int index) {
-            return rows.get(index);
+        public boolean isNull(int index) {
+            return values.get(index) == null;
+        }
+
+        @Override
+        public Object getObject(int index) {
+            return values.get(index);
         }
     }
 

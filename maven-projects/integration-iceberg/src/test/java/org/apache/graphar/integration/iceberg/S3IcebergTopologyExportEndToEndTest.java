@@ -44,6 +44,8 @@ import org.apache.graphar.io.Field;
 import org.apache.graphar.io.ReadCapability;
 import org.apache.graphar.io.RecordBatch;
 import org.apache.graphar.io.Schema;
+import org.apache.graphar.io.ValueVector;
+import org.apache.graphar.io.VectorRecordBatch;
 import org.apache.graphar.io.WriteMode;
 import org.apache.graphar.io.WriteRequest;
 import org.apache.graphar.io.parquet.ParquetPhysicalReader;
@@ -95,16 +97,16 @@ public class S3IcebergTopologyExportEndToEndTest {
                                 Types.NestedField.required(2, "destination", Types.LongType.get())),
                         PartitionSpec.unpartitioned());
         URI tableData = URI.create(table.location() + "/data/source-topology.parquet");
-        List<Row> snapshotEdges = new ArrayList<>();
+        List<TopologyEdge> snapshotEdges = new ArrayList<>();
         for (long destination = 10000; destination < 11300; destination++) {
-            snapshotEdges.add(new Row(2, destination));
+            snapshotEdges.add(new TopologyEdge(2, destination));
         }
         appendIcebergDataFile(table, tableData, snapshotEdges);
         long snapshotId = table.currentSnapshot().snapshotId();
         appendIcebergDataFile(
                 table,
                 URI.create(table.location() + "/data/newer-edge.parquet"),
-                List.of(new Row(3, 20000)));
+                List.of(new TopologyEdge(3, 20000)));
         assertTrue(snapshotId != table.currentSnapshot().snapshotId());
 
         InProcessS3 s3 = new InProcessS3();
@@ -169,13 +171,13 @@ public class S3IcebergTopologyExportEndToEndTest {
         }
     }
 
-    private static void appendIcebergDataFile(Table table, URI dataUri, List<Row> rows)
+    private static void appendIcebergDataFile(Table table, URI dataUri, List<TopologyEdge> rows)
             throws IOException {
         IcebergFileIOStorage storage = new IcebergFileIOStorage(table.io());
         new ParquetPhysicalWriter(storage)
                 .write(
                         new WriteRequest(dataUri, INPUT_SCHEMA, WriteMode.CREATE_NEW),
-                        new SingleBatchCursor(new Rows(INPUT_SCHEMA, rows)));
+                        new SingleBatchCursor(batch(INPUT_SCHEMA, rows)));
         table.newAppend()
                 .appendFile(
                         DataFiles.builder(table.spec())
@@ -218,41 +220,58 @@ public class S3IcebergTopologyExportEndToEndTest {
         }
     }
 
-    private static final class Row implements org.apache.graphar.io.Row {
-        private final Object[] values;
+    private static final class TopologyEdge {
+        private final long source;
+        private final long destination;
 
-        private Row(long source, long destination) {
-            this.values = new Object[] {source, destination};
-        }
-
-        @Override
-        public Object value(int index) {
-            return values[index];
+        private TopologyEdge(long source, long destination) {
+            this.source = source;
+            this.destination = destination;
         }
     }
 
-    private static final class Rows implements RecordBatch {
-        private final Schema schema;
-        private final List<Row> rows;
+    private static RecordBatch batch(Schema schema, List<TopologyEdge> edges) {
+        List<Object> sources = new ArrayList<>(edges.size());
+        List<Object> destinations = new ArrayList<>(edges.size());
+        for (TopologyEdge edge : edges) {
+            sources.add(edge.source);
+            destinations.add(edge.destination);
+        }
+        return new VectorRecordBatch(
+                schema,
+                List.of(
+                        new Values(schema.fields().get(0), sources),
+                        new Values(schema.fields().get(1), destinations)),
+                edges.size());
+    }
 
-        private Rows(Schema schema, List<Row> rows) {
-            this.schema = schema;
-            this.rows = rows;
+    private static final class Values implements ValueVector {
+        private final Field field;
+        private final List<Object> values;
+
+        private Values(Field field, List<Object> values) {
+            this.field = field;
+            this.values = List.copyOf(values);
         }
 
         @Override
-        public Schema schema() {
-            return schema;
+        public Field field() {
+            return field;
         }
 
         @Override
-        public int rowCount() {
-            return rows.size();
+        public int valueCount() {
+            return values.size();
         }
 
         @Override
-        public org.apache.graphar.io.Row row(int index) {
-            return rows.get(index);
+        public boolean isNull(int index) {
+            return values.get(index) == null;
+        }
+
+        @Override
+        public Object getObject(int index) {
+            return values.get(index);
         }
     }
 

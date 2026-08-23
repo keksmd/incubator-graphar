@@ -33,7 +33,7 @@ import org.apache.graphar.io.Projection;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.ReadResult;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
+import org.apache.graphar.io.ValueVector;
 import org.apache.graphar.io.WriteMode;
 import org.apache.graphar.io.parquet.ParquetPhysicalReader;
 import org.apache.graphar.io.parquet.ParquetPhysicalWriter;
@@ -222,10 +222,11 @@ public final class IcebergTopologyExporter {
         try (BatchCursor cursor = result.cursor()) {
             while (cursor.next()) {
                 RecordBatch batch = cursor.batch();
+                ValueVector sources = batch.column(0);
+                ValueVector destinations = batch.column(1);
                 for (int index = 0; index < batch.rowCount(); index++) {
-                    Row row = batch.row(index);
-                    Object source = row.value(0);
-                    Object destination = row.value(1);
+                    Object source = sources.getObject(index);
+                    Object destination = destinations.getObject(index);
                     if (!(source instanceof Long) || !(destination instanceof Long)) {
                         throw new IllegalArgumentException(
                                 "Iceberg topology columns must be required INT64 values in " + uri);

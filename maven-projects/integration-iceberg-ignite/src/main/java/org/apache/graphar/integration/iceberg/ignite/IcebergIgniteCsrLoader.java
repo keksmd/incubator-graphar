@@ -30,7 +30,7 @@ import org.apache.graphar.io.Projection;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.ReadResult;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
+import org.apache.graphar.io.ValueVector;
 import org.apache.graphar.io.parquet.ParquetPhysicalReader;
 import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.FileScanTask;
@@ -141,6 +141,8 @@ public final class IcebergIgniteCsrLoader {
         private final String destinationColumn;
         private BatchCursor batches;
         private RecordBatch batch;
+        private ValueVector sources;
+        private ValueVector destinations;
         private int rowIndex;
         private Long source;
         private Long destination;
@@ -162,15 +164,17 @@ public final class IcebergIgniteCsrLoader {
             destination = null;
             while (true) {
                 if (batch != null && rowIndex < batch.rowCount()) {
-                    Row row = batch.row(rowIndex++);
-                    source = requiredLong(row.value(0), sourceColumn);
-                    destination = requiredLong(row.value(1), destinationColumn);
+                    source = requiredLong(sources.getObject(rowIndex), sourceColumn);
+                    destination = requiredLong(destinations.getObject(rowIndex), destinationColumn);
+                    rowIndex++;
                     return true;
                 }
                 batch = null;
                 rowIndex = 0;
                 if (batches != null && batches.next()) {
                     batch = batches.batch();
+                    sources = batch.column(0);
+                    destinations = batch.column(1);
                     continue;
                 }
                 closeBatches();
@@ -195,6 +199,8 @@ public final class IcebergIgniteCsrLoader {
         public void close() throws IOException {
             closeBatches();
             batch = null;
+            sources = null;
+            destinations = null;
             source = null;
             destination = null;
         }
@@ -228,6 +234,8 @@ public final class IcebergIgniteCsrLoader {
                 batches.close();
                 batches = null;
             }
+            sources = null;
+            destinations = null;
         }
 
         private static long requiredLong(Object value, String column) {
