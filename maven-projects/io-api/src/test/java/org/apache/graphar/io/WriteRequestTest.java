@@ -44,6 +44,7 @@ public class WriteRequestTest {
         assertEquals(URI.create("memory:/out"), request.uri());
         assertSame(schema, request.schema());
         assertEquals(WriteMode.CREATE_NEW, request.mode());
+        assertEquals(WriteMode.APPEND, WriteMode.valueOf("APPEND"));
     }
 
     @Test

@@ -21,6 +21,7 @@ package org.apache.graphar.io;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
@@ -52,5 +53,16 @@ public class FieldTest {
     @Test
     public void refusesAMissingType() {
         assertThrows(NullPointerException.class, () -> new Field("id", null, true));
+    }
+
+    @Test
+    public void comparesAllSchemaRelevantValues() {
+        Field id = new Field("id", ColumnType.of(ColumnType.Kind.INT64), false);
+        Field sameId = new Field("id", ColumnType.of(ColumnType.Kind.INT64), false);
+
+        assertEquals(id, sameId);
+        assertEquals(id.hashCode(), sameId.hashCode());
+        assertNotEquals(id, new Field("id", ColumnType.of(ColumnType.Kind.INT32), false));
+        assertNotEquals(id, new Field("id", ColumnType.of(ColumnType.Kind.INT64), true));
     }
 }

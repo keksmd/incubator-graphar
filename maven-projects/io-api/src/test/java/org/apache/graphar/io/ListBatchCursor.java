@@ -63,33 +63,83 @@ final class ListBatchCursor implements BatchCursor {
     }
 
     private static final class ListRecordBatch implements RecordBatch {
-        private final Schema schema;
-        private final List<List<Object>> rows;
+        private final VectorRecordBatch delegate;
 
         private ListRecordBatch(Schema schema, List<List<Object>> rows) {
-            this.schema = schema;
-            this.rows = rows;
+            List<List<Object>> valuesByColumn = new ArrayList<>(schema.fields().size());
+            for (int column = 0; column < schema.fields().size(); column++) {
+                valuesByColumn.add(new ArrayList<>(rows.size()));
+            }
+            for (List<Object> row : rows) {
+                Objects.requireNonNull(row, "A batch row cannot be null.");
+                if (row.size() != schema.fields().size()) {
+                    throw new IllegalArgumentException(
+                            "A batch row does not match the schema width.");
+                }
+                for (int column = 0; column < row.size(); column++) {
+                    valuesByColumn.get(column).add(row.get(column));
+                }
+            }
+            List<ValueVector> columns = new ArrayList<>(valuesByColumn.size());
+            for (int column = 0; column < valuesByColumn.size(); column++) {
+                columns.add(
+                        new ListValueVector(
+                                schema.fields().get(column), valuesByColumn.get(column)));
+            }
+            this.delegate = new VectorRecordBatch(schema, columns, rows.size());
         }
 
         @Override
         public Schema schema() {
-            return schema;
+            return delegate.schema();
         }
 
         @Override
         public int rowCount() {
-            return rows.size();
+            return delegate.rowCount();
         }
 
         @Override
-        public Row row(int index) {
-            List<Object> values = rows.get(index);
-            return column -> {
-                Object value = values.get(column);
-                return value instanceof List
-                        ? Collections.unmodifiableList(new ArrayList<>((List<?>) value))
-                        : value;
-            };
+        public int columnCount() {
+            return delegate.columnCount();
+        }
+
+        @Override
+        public ValueVector column(int columnIndex) {
+            return delegate.column(columnIndex);
+        }
+    }
+
+    private static final class ListValueVector implements ValueVector {
+        private final Field field;
+        private final List<Object> values;
+
+        private ListValueVector(Field field, List<Object> values) {
+            this.field = field;
+            this.values = Collections.unmodifiableList(new ArrayList<>(values));
+        }
+
+        @Override
+        public Field field() {
+            return field;
+        }
+
+        @Override
+        public int valueCount() {
+            return values.size();
+        }
+
+        @Override
+        public boolean isNull(int index) {
+            return values.get(index) == null;
+        }
+
+        @Override
+        public Object getObject(int index) {
+            Object value = values.get(index);
+            return value instanceof List
+                    ? Collections.unmodifiableList(new ArrayList<>((List<?>) value))
+                    : value;
         }
     }
 }

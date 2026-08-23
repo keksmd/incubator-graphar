@@ -30,6 +30,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -69,27 +70,34 @@ public class RecordBatchTest {
                 new ListBatchCursor(
                         schema(), Collections.singletonList(Collections.singletonList(row())))) {
             assertTrue(cursor.next());
-            Row first = cursor.batch().row(0);
+            RecordBatch batch = cursor.batch();
 
-            assertEquals(Boolean.TRUE, first.value(0));
-            assertEquals(Long.valueOf(7L), first.value(1));
-            assertNull(first.value(2));
-            assertTrue(((ByteBuffer) first.value(3)).isReadOnly());
-            assertEquals(LocalDate.of(2024, 5, 17), first.value(4));
-            assertEquals(Instant.ofEpochMilli(1_715_000_000_000L), first.value(5));
-            assertEquals(Arrays.asList("a", "b"), first.value(6));
+            assertEquals(7, batch.columnCount());
+            assertEquals(Boolean.TRUE, batch.column(0).getObject(0));
+            assertEquals(Long.valueOf(7L), batch.column(1).getObject(0));
+            assertTrue(batch.column(2).isNull(0));
+            assertNull(batch.column(2).getObject(0));
+            assertTrue(((ByteBuffer) batch.column(3).getObject(0)).isReadOnly());
+            assertEquals(LocalDate.of(2024, 5, 17), batch.column(4).getObject(0));
+            assertEquals(Instant.ofEpochMilli(1_715_000_000_000L), batch.column(5).getObject(0));
+            assertEquals(Arrays.asList("a", "b"), batch.column(6).getObject(0));
         }
     }
 
     @Test
     public void publishesListValuesTheCallerCannotMutate() throws IOException {
+        List<Object> rowWithNullableElement = new ArrayList<>(row());
+        rowWithNullableElement.set(6, Arrays.asList("a", null));
         try (ListBatchCursor cursor =
                 new ListBatchCursor(
-                        schema(), Collections.singletonList(Collections.singletonList(row())))) {
+                        schema(),
+                        Collections.singletonList(
+                                Collections.singletonList(rowWithNullableElement)))) {
             assertTrue(cursor.next());
             @SuppressWarnings("unchecked")
-            List<String> tags = (List<String>) cursor.batch().row(0).value(6);
+            List<String> tags = (List<String>) cursor.batch().column(6).getObject(0);
 
+            assertEquals(Arrays.asList("a", null), tags);
             assertThrows(UnsupportedOperationException.class, () -> tags.add("c"));
         }
     }
@@ -103,6 +111,7 @@ public class RecordBatchTest {
 
         assertTrue(cursor.next());
         assertEquals(2, cursor.batch().rowCount());
+        assertEquals(2, cursor.batch().column(0).valueCount());
         assertTrue(cursor.next());
         assertEquals(1, cursor.batch().rowCount());
         assertFalse(cursor.next());

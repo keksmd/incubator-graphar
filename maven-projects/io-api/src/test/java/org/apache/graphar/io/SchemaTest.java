@@ -51,13 +51,12 @@ public class SchemaTest {
     }
 
     @Test
-    public void refusesDuplicateColumnNames() {
-        IllegalArgumentException failure =
-                assertThrows(
-                        IllegalArgumentException.class,
-                        () -> new Schema(Arrays.asList(field("src"), field("src"))));
+    public void preservesDuplicateColumnNamesForIndexBasedAccess() {
+        Schema schema = new Schema(Arrays.asList(field("src"), field("src")));
 
-        assertTrue(failure.getMessage().contains("src"));
+        assertEquals(2, schema.fields().size());
+        assertEquals("src", schema.fields().get(0).name());
+        assertEquals("src", schema.fields().get(1).name());
     }
 
     @Test

@@ -63,14 +63,21 @@ public class PhysicalWriterContractTest {
             if (request.mode() == WriteMode.CREATE_NEW && written.containsKey(request.uri())) {
                 throw new IOException("Target already exists: " + request.uri());
             }
-            List<Object> values = new ArrayList<>();
+            List<Object> values =
+                    request.mode() == WriteMode.APPEND && written.containsKey(request.uri())
+                            ? new ArrayList<>(written.get(request.uri()))
+                            : new ArrayList<>();
             while (batches.next()) {
                 RecordBatch batch = batches.batch();
                 if (!describes(batch.schema(), request.schema())) {
                     throw new IOException("A batch does not match the requested schema.");
                 }
+                ValueVector valuesVector = batch.column(0);
+                if (valuesVector.valueCount() != batch.rowCount()) {
+                    throw new IOException("A vector does not match the batch row count.");
+                }
                 for (int row = 0; row < batch.rowCount(); row++) {
-                    values.add(batch.row(row).value(0));
+                    values.add(valuesVector.getObject(row));
                 }
             }
             written.put(request.uri(), values);
@@ -127,6 +134,16 @@ public class PhysicalWriterContractTest {
         writer.write(new WriteRequest(TARGET, schema(), WriteMode.OVERWRITE), cursorOf(2L, 3L));
 
         assertEquals(Arrays.asList(2L, 3L), writer.written.get(TARGET));
+    }
+
+    @Test
+    public void extendsAnExistingTargetUnderAppend() throws IOException {
+        MemoryWriter writer = new MemoryWriter();
+        writer.write(new WriteRequest(TARGET, schema(), WriteMode.CREATE_NEW), cursorOf(1L));
+
+        writer.write(new WriteRequest(TARGET, schema(), WriteMode.APPEND), cursorOf(2L, 3L));
+
+        assertEquals(Arrays.asList(1L, 2L, 3L), writer.written.get(TARGET));
     }
 
     @Test
