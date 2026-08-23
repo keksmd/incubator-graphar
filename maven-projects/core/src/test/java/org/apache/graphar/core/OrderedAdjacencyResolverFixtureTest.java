@@ -39,6 +39,7 @@ import org.apache.graphar.io.BatchCursor;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.ReadResult;
 import org.apache.graphar.io.RecordBatch;
+import org.apache.graphar.io.ValueVector;
 import org.apache.graphar.io.parquet.ParquetPhysicalReader;
 import org.apache.graphar.storage.local.LocalStorage;
 import org.junit.Test;
@@ -125,8 +126,9 @@ public class OrderedAdjacencyResolverFixtureTest {
         try (BatchCursor cursor = result.cursor()) {
             while (cursor.next()) {
                 RecordBatch batch = cursor.batch();
+                ValueVector offsets = batch.column(0);
                 for (int index = 0; index < batch.rowCount(); index++) {
-                    values.add((Long) batch.row(index).value(0));
+                    values.add((Long) offsets.getObject(index));
                 }
             }
         }
