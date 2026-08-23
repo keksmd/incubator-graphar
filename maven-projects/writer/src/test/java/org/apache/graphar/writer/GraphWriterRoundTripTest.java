@@ -47,7 +47,6 @@ import org.apache.graphar.io.BatchCursor;
 import org.apache.graphar.io.ColumnType;
 import org.apache.graphar.io.Field;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
 import org.apache.graphar.io.Schema;
 import org.apache.graphar.io.WriteMode;
 import org.apache.graphar.io.parquet.ParquetPhysicalReader;
@@ -245,50 +244,14 @@ public class GraphWriterRoundTripTest {
             while (cursor.next()) {
                 RecordBatch batch = cursor.batch();
                 for (int index = 0; index < batch.rowCount(); index++)
-                    values.add((Long) batch.row(index).value(0));
+                    values.add((Long) batch.column(0).getObject(index));
             }
         }
         return values;
     }
 
     private static BatchCursor rows(Schema schema, List<Object[]> values) {
-        List<Row> rows = new ArrayList<>();
-        for (Object[] value : values) rows.add(index -> value[index]);
-        RecordBatch batch =
-                new RecordBatch() {
-                    @Override
-                    public Schema schema() {
-                        return schema;
-                    }
-
-                    @Override
-                    public int rowCount() {
-                        return rows.size();
-                    }
-
-                    @Override
-                    public Row row(int index) {
-                        return rows.get(index);
-                    }
-                };
-        return new BatchCursor() {
-            private boolean available = true;
-
-            @Override
-            public boolean next() {
-                boolean result = available;
-                available = false;
-                return result;
-            }
-
-            @Override
-            public RecordBatch batch() {
-                return batch;
-            }
-
-            @Override
-            public void close() {}
-        };
+        return WriterTestBatches.rows(schema, values);
     }
 
     private static final class GraphDefinition {

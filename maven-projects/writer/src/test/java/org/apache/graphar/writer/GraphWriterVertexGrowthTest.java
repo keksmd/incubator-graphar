@@ -46,7 +46,6 @@ import org.apache.graphar.io.ColumnType;
 import org.apache.graphar.io.Field;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
 import org.apache.graphar.io.Schema;
 import org.apache.graphar.io.WriteMode;
 import org.apache.graphar.io.parquet.ParquetPhysicalReader;
@@ -149,8 +148,10 @@ public class GraphWriterVertexGrowthTest {
             while (cursor.next()) {
                 RecordBatch batch = cursor.batch();
                 for (int index = 0; index < batch.rowCount(); index++) {
-                    Row row = batch.row(index);
-                    values.add(row.value(0) + "=" + row.value(1));
+                    values.add(
+                            batch.column(0).getObject(index)
+                                    + "="
+                                    + batch.column(1).getObject(index));
                 }
             }
         }
@@ -164,46 +165,11 @@ public class GraphWriterVertexGrowthTest {
     }
 
     private static BatchCursor ids(long from, long toExclusive) {
-        List<Row> rows = new ArrayList<>();
+        List<Object[]> rows = new ArrayList<>();
         for (long id = from; id < toExclusive; id++) {
-            long value = id;
-            rows.add(index -> value);
+            rows.add(new Object[] {id});
         }
-        RecordBatch batch =
-                new RecordBatch() {
-                    @Override
-                    public Schema schema() {
-                        return SOURCE_SCHEMA;
-                    }
-
-                    @Override
-                    public int rowCount() {
-                        return rows.size();
-                    }
-
-                    @Override
-                    public Row row(int index) {
-                        return rows.get(index);
-                    }
-                };
-        return new BatchCursor() {
-            private boolean available = true;
-
-            @Override
-            public boolean next() {
-                boolean result = available;
-                available = false;
-                return result;
-            }
-
-            @Override
-            public RecordBatch batch() {
-                return batch;
-            }
-
-            @Override
-            public void close() {}
-        };
+        return WriterTestBatches.rows(SOURCE_SCHEMA, rows);
     }
 
     private static Definition definition(URI root) {

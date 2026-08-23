@@ -61,8 +61,9 @@ import org.apache.graphar.io.ColumnType;
 import org.apache.graphar.io.Field;
 import org.apache.graphar.io.PhysicalWriter;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
 import org.apache.graphar.io.Schema;
+import org.apache.graphar.io.ValueVector;
+import org.apache.graphar.io.VectorRecordBatch;
 import org.apache.graphar.io.WriteMode;
 import org.apache.graphar.io.WriteRequest;
 import org.apache.graphar.storage.PositionOutput;
@@ -142,16 +143,15 @@ public final class GraphWriter {
         Schema outputSchema = vertexSchema(propertyGroup);
         long count = 0;
         long chunk = 0;
-        List<Row> rows = new ArrayList<>();
+        List<Object[]> rows = new ArrayList<>();
         try {
             while (source.next()) {
                 RecordBatch batch =
                         Objects.requireNonNull(source.batch(), "batch cursor returned null");
                 requireSchema(sourceSchema, batch.schema());
                 for (int index = 0; index < batch.rowCount(); index++) {
-                    Row row = batch.row(index);
-                    validatePropertyCardinality(propertyGroup, row);
-                    rows.add(vertexRow(count, row, sourceSchema));
+                    validatePropertyCardinality(propertyGroup, batch, index);
+                    rows.add(vertexValues(count, batch, index, sourceSchema));
                     count = Math.addExact(count, 1);
                     if (rows.size() == vertexInfo.getChunkSize()) {
                         writeRows(
@@ -214,20 +214,19 @@ public final class GraphWriter {
         Schema outputSchema = vertexSchema(propertyGroup);
         long chunkSize = vertexInfo.getChunkSize();
         long firstVertex = Math.multiplyExact(partition, chunkSize);
-        List<Row> rows = new ArrayList<>();
+        List<Object[]> rows = new ArrayList<>();
         try {
             while (source.next()) {
                 RecordBatch batch =
                         Objects.requireNonNull(source.batch(), "batch cursor returned null");
                 requireSchema(sourceSchema, batch.schema());
                 for (int index = 0; index < batch.rowCount(); index++) {
-                    Row row = batch.row(index);
-                    validatePropertyCardinality(propertyGroup, row);
+                    validatePropertyCardinality(propertyGroup, batch, index);
                     if (rows.size() == chunkSize) {
                         throw new IllegalArgumentException(
                                 "Vertex partition source exceeds the chunk size of " + chunkSize);
                     }
-                    rows.add(vertexRow(firstVertex + rows.size(), row, sourceSchema));
+                    rows.add(vertexValues(firstVertex + rows.size(), batch, index, sourceSchema));
                 }
             }
         } finally {
@@ -304,16 +303,16 @@ public final class GraphWriter {
             long partitionStart = Math.multiplyExact(partition, edgeInfo.getSrcChunkSize());
             long verticesInPartition =
                     Math.min(edgeInfo.getSrcChunkSize(), sourceVertexCount - partitionStart);
-            List<Row> offsets = new ArrayList<>();
-            offsets.add(new ArrayRow(new Object[] {0L}));
-            List<Row> adjacency = new ArrayList<>();
+            List<Object[]> offsets = new ArrayList<>();
+            offsets.add(new Object[] {0L});
+            List<Object[]> adjacency = new ArrayList<>();
             long partitionEdges = 0;
             long edgeChunk = 0;
             for (long localVertex = 0; localVertex < verticesInPartition; localVertex++) {
                 long source = partitionStart + localVertex;
                 while (nextEdge < edges.size() && edges.get(nextEdge).source() == source) {
                     TopologyEdge edge = edges.get(nextEdge++);
-                    adjacency.add(new ArrayRow(new Object[] {edge.source(), edge.destination()}));
+                    adjacency.add(new Object[] {edge.source(), edge.destination()});
                     partitionEdges = Math.addExact(partitionEdges, 1);
                     total = Math.addExact(total, 1);
                     if (adjacency.size() == edgeInfo.getChunkSize()) {
@@ -325,7 +324,7 @@ public final class GraphWriter {
                         adjacency = new ArrayList<>();
                     }
                 }
-                offsets.add(new ArrayRow(new Object[] {partitionEdges}));
+                offsets.add(new Object[] {partitionEdges});
             }
             if (!adjacency.isEmpty()) {
                 writeRows(
@@ -758,9 +757,7 @@ public final class GraphWriter {
                         count,
                         codec,
                         TOPOLOGY_SCHEMA,
-                        record ->
-                                new ArrayRow(
-                                        new Object[] {record.source(), record.destination()})));
+                        record -> new Object[] {record.source(), record.destination()}));
         for (PropertyGroup group : propertyGroups) {
             Schema schema = schema(group);
             physicalWriter.write(
@@ -771,17 +768,17 @@ public final class GraphWriter {
                             schema,
                             writeMode),
                     new EdgeFileBatchCursor(
-                            chunk, count, codec, schema, record -> propertyRow(group, record)));
+                            chunk, count, codec, schema, record -> propertyValues(group, record)));
         }
     }
 
-    private static Row propertyRow(PropertyGroup group, EdgeRecord record) {
+    private static Object[] propertyValues(PropertyGroup group, EdgeRecord record) {
         Object[] values = new Object[group.size()];
         int index = 0;
         for (Property property : group) {
             values[index++] = record.properties().get(property.getName());
         }
-        return new ArrayRow(values);
+        return values;
     }
 
     private static Path partitionPath(Path workDirectory, long partition) {
@@ -826,10 +823,10 @@ public final class GraphWriter {
         }
     }
 
-    private void writeRows(URI uri, Schema schema, List<Row> rows) throws IOException {
+    private void writeRows(URI uri, Schema schema, List<Object[]> rows) throws IOException {
         physicalWriter.write(
                 new WriteRequest(absolute(uri), schema, writeMode),
-                new SingleBatchCursor(new ListRecordBatch(schema, rows)));
+                new SingleBatchCursor(columnarBatch(schema, rows)));
     }
 
     private void writeLong(URI uri, long value) throws IOException {
@@ -956,9 +953,9 @@ public final class GraphWriter {
             List<EdgeRecord> records,
             List<PropertyGroup> propertyGroups)
             throws IOException {
-        List<Row> topology = new ArrayList<>(records.size());
+        List<Object[]> topology = new ArrayList<>(records.size());
         for (EdgeRecord record : records) {
-            topology.add(new ArrayRow(new Object[] {record.source(), record.destination()}));
+            topology.add(new Object[] {record.source(), record.destination()});
         }
         writeRows(
                 edgeInfo.getAdjacentListChunkUri(layout, partition, edgeChunk),
@@ -966,14 +963,14 @@ public final class GraphWriter {
                 topology);
         for (PropertyGroup propertyGroup : propertyGroups) {
             Schema schema = schema(propertyGroup);
-            List<Row> properties = new ArrayList<>(records.size());
+            List<Object[]> properties = new ArrayList<>(records.size());
             for (EdgeRecord record : records) {
                 Object[] values = new Object[propertyGroup.size()];
                 int index = 0;
                 for (Property property : propertyGroup) {
                     values[index++] = record.properties().get(property.getName());
                 }
-                properties.add(new ArrayRow(values));
+                properties.add(values);
             }
             writeRows(
                     edgeInfo.getPropertyGroupChunkUri(propertyGroup, layout, partition, edgeChunk),
@@ -1008,10 +1005,11 @@ public final class GraphWriter {
         }
     }
 
-    private static void validatePropertyCardinality(PropertyGroup propertyGroup, Row row) {
+    private static void validatePropertyCardinality(
+            PropertyGroup propertyGroup, RecordBatch batch, int rowIndex) {
         int index = 0;
         for (Property property : propertyGroup) {
-            Object value = row.value(index++);
+            Object value = batch.column(index++).getObject(rowIndex);
             if (value == null) {
                 continue;
             }
@@ -1069,19 +1067,14 @@ public final class GraphWriter {
         }
     }
 
-    private static Row copyRow(Row source, Schema schema) {
-        Object[] values = new Object[schema.fields().size()];
-        for (int index = 0; index < values.length; index++) values[index] = source.value(index);
-        return new ArrayRow(values);
-    }
-
-    private static Row vertexRow(long vertexId, Row source, Schema sourceSchema) {
+    private static Object[] vertexValues(
+            long vertexId, RecordBatch source, int rowIndex, Schema sourceSchema) {
         Object[] values = new Object[sourceSchema.fields().size() + 1];
         values[0] = vertexId;
         for (int index = 0; index < sourceSchema.fields().size(); index++) {
-            values[index + 1] = source.value(index);
+            values[index + 1] = source.column(index).getObject(rowIndex);
         }
-        return new ArrayRow(values);
+        return values;
     }
 
     private final class PartitionEdgeWriter {
@@ -1415,7 +1408,7 @@ public final class GraphWriter {
                 return false;
             }
             int batchSize = Math.toIntExact(Math.min(BATCH_ROWS, count - read));
-            List<Row> rows = new ArrayList<>(batchSize);
+            List<Object[]> rows = new ArrayList<>(batchSize);
             for (int index = 0; index < batchSize; index++) {
                 EdgeRecord record = input.next();
                 if (record == null) {
@@ -1424,7 +1417,7 @@ public final class GraphWriter {
                 rows.add(mapper.map(record));
             }
             read += batchSize;
-            batch = new ListRecordBatch(schema, rows);
+            batch = columnarBatch(schema, rows);
             return true;
         }
 
@@ -1459,12 +1452,12 @@ public final class GraphWriter {
                 return false;
             }
             int batchSize = Math.toIntExact(Math.min(BATCH_ROWS, count - read));
-            List<Row> rows = new ArrayList<>(batchSize);
+            List<Object[]> rows = new ArrayList<>(batchSize);
             for (int index = 0; index < batchSize; index++) {
-                rows.add(new ArrayRow(new Object[] {input.readLong()}));
+                rows.add(new Object[] {input.readLong()});
             }
             read += batchSize;
-            batch = new ListRecordBatch(OFFSET_SCHEMA, rows);
+            batch = columnarBatch(OFFSET_SCHEMA, rows);
             return true;
         }
 
@@ -1486,7 +1479,7 @@ public final class GraphWriter {
     }
 
     private interface EdgeRowMapper {
-        Row map(EdgeRecord record);
+        Object[] map(EdgeRecord record);
     }
 
     private static final class RunHead {
@@ -1531,41 +1524,54 @@ public final class GraphWriter {
         }
     }
 
-    private static final class ArrayRow implements Row {
-        private final Object[] values;
-
-        private ArrayRow(Object[] values) {
-            this.values = values;
+    private static VectorRecordBatch columnarBatch(Schema schema, List<Object[]> rows) {
+        Objects.requireNonNull(schema, "Batch schema cannot be null.");
+        Objects.requireNonNull(rows, "Batch rows cannot be null.");
+        List<Object[]> copiedRows = new ArrayList<>(rows.size());
+        for (Object[] row : rows) {
+            if (row == null || row.length != schema.fields().size()) {
+                throw new IllegalArgumentException("Every staged row must match the batch schema.");
+            }
+            copiedRows.add(row.clone());
         }
-
-        @Override
-        public Object value(int columnIndex) {
-            return values[columnIndex];
+        List<ValueVector> columns = new ArrayList<>(schema.fields().size());
+        for (int column = 0; column < schema.fields().size(); column++) {
+            Object[] values = new Object[copiedRows.size()];
+            for (int row = 0; row < copiedRows.size(); row++) {
+                values[row] = copiedRows.get(row)[column];
+            }
+            columns.add(new ObjectArrayVector(schema.fields().get(column), values));
         }
+        return new VectorRecordBatch(schema, columns, copiedRows.size());
     }
 
-    private static final class ListRecordBatch implements RecordBatch {
-        private final Schema schema;
-        private final List<Row> rows;
+    private static final class ObjectArrayVector implements ValueVector {
+        private final Field field;
+        private final Object[] values;
 
-        private ListRecordBatch(Schema schema, List<Row> rows) {
-            this.schema = schema;
-            this.rows = List.copyOf(rows);
+        private ObjectArrayVector(Field field, Object[] values) {
+            this.field = Objects.requireNonNull(field, "Vector field cannot be null.");
+            this.values = values.clone();
         }
 
         @Override
-        public Schema schema() {
-            return schema;
+        public Field field() {
+            return field;
         }
 
         @Override
-        public int rowCount() {
-            return rows.size();
+        public int valueCount() {
+            return values.length;
         }
 
         @Override
-        public Row row(int index) {
-            return rows.get(index);
+        public boolean isNull(int index) {
+            return values[index] == null;
+        }
+
+        @Override
+        public Object getObject(int index) {
+            return values[index];
         }
     }
 
