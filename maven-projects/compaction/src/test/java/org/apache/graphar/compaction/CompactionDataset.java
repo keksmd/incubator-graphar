@@ -38,8 +38,9 @@ import org.apache.graphar.io.BatchCursor;
 import org.apache.graphar.io.ColumnType;
 import org.apache.graphar.io.Field;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
 import org.apache.graphar.io.Schema;
+import org.apache.graphar.io.ValueVector;
+import org.apache.graphar.io.VectorRecordBatch;
 import org.apache.graphar.io.WriteMode;
 import org.apache.graphar.io.parquet.ParquetPhysicalReader;
 import org.apache.graphar.io.parquet.ParquetPhysicalWriter;
@@ -172,27 +173,19 @@ final class CompactionDataset {
     }
 
     private static BatchCursor rows(Schema schema, List<Object[]> values) {
-        List<Row> rows = new ArrayList<>();
-        for (Object[] value : values) {
-            rows.add(index -> value[index]);
+        List<ValueVector> columns = new ArrayList<>(schema.fields().size());
+        for (int column = 0; column < schema.fields().size(); column++) {
+            Object[] columnValues = new Object[values.size()];
+            for (int row = 0; row < values.size(); row++) {
+                Object[] rowValues = values.get(row);
+                if (rowValues == null || rowValues.length != schema.fields().size()) {
+                    throw new IllegalArgumentException("Every fixture row must match the schema.");
+                }
+                columnValues[row] = rowValues[column];
+            }
+            columns.add(new ObjectArrayVector(schema.fields().get(column), columnValues));
         }
-        RecordBatch batch =
-                new RecordBatch() {
-                    @Override
-                    public Schema schema() {
-                        return schema;
-                    }
-
-                    @Override
-                    public int rowCount() {
-                        return rows.size();
-                    }
-
-                    @Override
-                    public Row row(int index) {
-                        return rows.get(index);
-                    }
-                };
+        RecordBatch batch = new VectorRecordBatch(schema, columns, values.size());
         return new BatchCursor() {
             private boolean available = true;
 
@@ -211,5 +204,35 @@ final class CompactionDataset {
             @Override
             public void close() {}
         };
+    }
+
+    private static final class ObjectArrayVector implements ValueVector {
+        private final Field field;
+        private final Object[] values;
+
+        private ObjectArrayVector(Field field, Object[] values) {
+            this.field = field;
+            this.values = values;
+        }
+
+        @Override
+        public Field field() {
+            return field;
+        }
+
+        @Override
+        public int valueCount() {
+            return values.length;
+        }
+
+        @Override
+        public boolean isNull(int index) {
+            return values[index] == null;
+        }
+
+        @Override
+        public Object getObject(int index) {
+            return values[index];
+        }
     }
 }
