@@ -48,4 +48,18 @@ public final class WriteRequest {
     public WriteMode mode() {
         return mode;
     }
+
+    @Override
+    public boolean equals(Object other) {
+        if (!(other instanceof WriteRequest)) {
+            return false;
+        }
+        WriteRequest that = (WriteRequest) other;
+        return uri.equals(that.uri) && schema.equals(that.schema) && mode == that.mode;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(uri, schema, mode);
+    }
 }

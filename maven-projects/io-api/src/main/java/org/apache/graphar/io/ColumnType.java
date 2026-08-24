@@ -198,11 +198,32 @@ public final class ColumnType {
     }
 
     private static boolean isScalar(Kind kind) {
-        return kind != Kind.FIXED_SIZE_BINARY
-                && kind != Kind.DECIMAL
-                && kind != Kind.LIST
-                && kind != Kind.FIXED_SIZE_LIST
-                && kind != Kind.STRUCT
-                && kind != Kind.MAP;
+        switch (kind) {
+            case BOOLEAN:
+            case INT8:
+            case INT16:
+            case INT32:
+            case INT64:
+            case UINT8:
+            case UINT16:
+            case UINT32:
+            case UINT64:
+            case FLOAT32:
+            case FLOAT64:
+            case STRING:
+            case BINARY:
+            case DATE:
+            case TIMESTAMP_MILLIS:
+                return true;
+            case FIXED_SIZE_BINARY:
+            case DECIMAL:
+            case LIST:
+            case FIXED_SIZE_LIST:
+            case STRUCT:
+            case MAP:
+                return false;
+            default:
+                throw new IllegalStateException("Unhandled column type kind: " + kind);
+        }
     }
 }

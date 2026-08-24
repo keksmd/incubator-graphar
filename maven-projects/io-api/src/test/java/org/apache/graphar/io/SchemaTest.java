@@ -20,6 +20,7 @@
 package org.apache.graphar.io;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
@@ -82,5 +83,16 @@ public class SchemaTest {
         Schema schema = new Schema(Collections.singletonList(field("src")));
 
         assertThrows(UnsupportedOperationException.class, () -> schema.fields().add(field("dst")));
+    }
+
+    @Test
+    public void comparesEqualByPhysicalFieldOrder() {
+        Schema first = new Schema(Arrays.asList(field("src"), field("dst")));
+        Schema same = new Schema(Arrays.asList(field("src"), field("dst")));
+        Schema differentOrder = new Schema(Arrays.asList(field("dst"), field("src")));
+
+        assertEquals(first, same);
+        assertEquals(first.hashCode(), same.hashCode());
+        assertNotEquals(first, differentOrder);
     }
 }

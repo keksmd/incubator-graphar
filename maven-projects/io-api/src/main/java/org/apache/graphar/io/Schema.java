@@ -40,4 +40,14 @@ public final class Schema {
     public List<Field> fields() {
         return fields;
     }
+
+    @Override
+    public boolean equals(Object other) {
+        return other instanceof Schema && fields.equals(((Schema) other).fields);
+    }
+
+    @Override
+    public int hashCode() {
+        return fields.hashCode();
+    }
 }

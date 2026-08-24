@@ -20,6 +20,7 @@
 package org.apache.graphar.io;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
 
@@ -60,5 +61,28 @@ public class WriteRequestTest {
         assertThrows(
                 NullPointerException.class,
                 () -> new WriteRequest(URI.create("memory:/out"), schema, null));
+    }
+
+    @Test
+    public void comparesEqualByUriSchemaAndDisposition() {
+        Schema schema =
+                new Schema(List.of(new Field("id", ColumnType.of(ColumnType.Kind.INT64), false)));
+        WriteRequest first = new WriteRequest(URI.create("memory:/out"), schema, WriteMode.APPEND);
+        WriteRequest same =
+                new WriteRequest(
+                        URI.create("memory:/out"),
+                        new Schema(
+                                List.of(
+                                        new Field(
+                                                "id",
+                                                ColumnType.of(ColumnType.Kind.INT64),
+                                                false))),
+                        WriteMode.APPEND);
+        WriteRequest differentMode =
+                new WriteRequest(URI.create("memory:/out"), schema, WriteMode.OVERWRITE);
+
+        assertEquals(first, same);
+        assertEquals(first.hashCode(), same.hashCode());
+        assertNotEquals(first, differentMode);
     }
 }
