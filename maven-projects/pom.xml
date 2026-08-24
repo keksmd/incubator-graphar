@@ -82,6 +82,7 @@
         <module>storage-local</module>
         <module>io-api</module>
         <module>storage-s3</module>
+        <module>core</module>
     </modules>
 
     <build>
