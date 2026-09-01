@@ -80,6 +80,7 @@
         <module>info</module>
         <module>storage-api</module>
         <module>storage-local</module>
+        <module>io-api</module>
     </modules>
 
     <build>
