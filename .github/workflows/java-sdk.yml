@@ -85,4 +85,4 @@ jobs:
         working-directory: maven-projects
         run: |
           export JAVA_HOME=${JAVA_HOME_11_X64}
-          mvn --no-transfer-progress -pl ${SDK_MODULES} -am javadoc:javadoc
+          mvn --no-transfer-progress -pl ${SDK_MODULES} -am package javadoc:javadoc -DskipTests -Dspotless.check.skip=true
