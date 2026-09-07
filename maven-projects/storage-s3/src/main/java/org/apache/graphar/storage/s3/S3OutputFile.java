@@ -23,12 +23,14 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.URI;
 import java.nio.ByteBuffer;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.apache.graphar.storage.OutputFile;
 import org.apache.graphar.storage.PositionOutput;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 final class S3OutputFile implements OutputFile {
@@ -49,7 +51,26 @@ final class S3OutputFile implements OutputFile {
 
     @Override
     public PositionOutput create() throws IOException {
+        failIfPresent();
         return open(true);
+    }
+
+    /**
+     * Rejects an existing object before any byte is staged, so that a caller learns about the
+     * conflict at open time the way the local adapter does. A head request that cannot answer is
+     * not treated as a conflict: the conditional publication in {@link StagedOutput#close()}
+     * remains the atomic guarantee.
+     *
+     * @throws FileAlreadyExistsException when the object is already present
+     */
+    private void failIfPresent() throws IOException {
+        try {
+            client.headObject(
+                    HeadObjectRequest.builder().bucket(location.bucket).key(location.key).build());
+        } catch (RuntimeException absentOrUnknown) {
+            return;
+        }
+        throw new FileAlreadyExistsException(location.uri.toString());
     }
 
     @Override

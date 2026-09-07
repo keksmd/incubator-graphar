@@ -22,6 +22,7 @@ package org.apache.graphar.storage.s3;
 import java.lang.reflect.Proxy;
 import java.net.URI;
 import java.nio.ByteBuffer;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.util.Arrays;
 import org.apache.graphar.storage.PositionOutput;
@@ -35,6 +36,7 @@ import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
+import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 
@@ -66,6 +68,20 @@ public class S3StorageTest {
         Assert.assertArrayEquals(new byte[] {9, 8, 7}, log.putBytes);
     }
 
+    @Test
+    public void rejectsAnExistingObjectBeforeStagingAnyByte() throws Exception {
+        RequestLog log = new RequestLog("abcdef".getBytes());
+        S3Storage storage =
+                new S3Storage(log.client(), Files.createTempDirectory("graphar-s3-stage"));
+
+        try {
+            storage.outputFile(URI.create("s3://bucket/graph/a.parquet")).create();
+            Assert.fail("create() must reject an object that already exists.");
+        } catch (FileAlreadyExistsException expected) {
+            Assert.assertNull("No object may be published on a rejected create().", log.putBytes);
+        }
+    }
+
     private static final class RequestLog {
         private final byte[] object;
         private String range;
@@ -86,6 +102,9 @@ public class S3StorageTest {
                                 if ("headObject".equals(method.getName())) {
                                     HeadObjectRequest request = (HeadObjectRequest) arguments[0];
                                     Assert.assertEquals("bucket", request.bucket());
+                                    if (!"graph/a.parquet".equals(request.key())) {
+                                        throw NoSuchKeyException.builder().statusCode(404).build();
+                                    }
                                     return HeadObjectResponse.builder()
                                             .contentLength((long) object.length)
                                             .versionId("version-1")
