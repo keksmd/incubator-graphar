@@ -25,6 +25,7 @@ on:
       - 'maven-projects/pom.xml'
       - 'maven-projects/storage-api/**'
       - 'maven-projects/storage-local/**'
+      - 'maven-projects/storage-s3/**'
       - 'maven-projects/io-api/**'
       - 'maven-projects/io-parquet/**'
       - 'maven-projects/core/**'
@@ -38,6 +39,7 @@ on:
       - 'maven-projects/pom.xml'
       - 'maven-projects/storage-api/**'
       - 'maven-projects/storage-local/**'
+      - 'maven-projects/storage-s3/**'
       - 'maven-projects/io-api/**'
       - 'maven-projects/io-parquet/**'
       - 'maven-projects/core/**'
@@ -53,7 +55,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     env:
-      SDK_MODULES: storage-api
+      SDK_MODULES: storage-api,storage-local,io-api,storage-s3
     steps:
       - uses: actions/checkout@v7
         with:
@@ -83,4 +85,4 @@ jobs:
         working-directory: maven-projects
         run: |
           export JAVA_HOME=${JAVA_HOME_11_X64}
-          mvn --no-transfer-progress -pl ${SDK_MODULES} -am javadoc:javadoc
+          mvn --no-transfer-progress -pl ${SDK_MODULES} -am package javadoc:javadoc -DskipTests -Dspotless.check.skip=true
