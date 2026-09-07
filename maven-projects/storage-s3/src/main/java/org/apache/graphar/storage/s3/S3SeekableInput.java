@@ -28,13 +28,24 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 
+/**
+ * Reads an object through range requests, keeping the last fetched block in memory so that the
+ * small sequential reads typical of columnar footers do not cost one round trip each. A read at
+ * least as large as the block size bypasses the buffer and is served by a single request.
+ */
 final class S3SeekableInput implements SeekableInput {
+    private static final int BLOCK_SIZE = 1 << 20;
+    private static final byte[] NO_BLOCK = new byte[0];
+
     private final S3Client client;
     private final S3Storage.Location location;
     private final long size;
     private final String versionId;
     private final String eTag;
     private long position;
+    private byte[] block = NO_BLOCK;
+    private long blockStart;
+    private int blockLength;
     private boolean closed;
 
     S3SeekableInput(
@@ -74,12 +85,32 @@ final class S3SeekableInput implements SeekableInput {
         if (position >= size) {
             return -1;
         }
-        int count = (int) Math.min(destination.remaining(), size - position);
+        int wanted = (int) Math.min(destination.remaining(), size - position);
+        if (wanted >= BLOCK_SIZE) {
+            byte[] bytes = fetch(position, wanted);
+            destination.put(bytes);
+            position += bytes.length;
+            return bytes.length;
+        }
+        if (position < blockStart || position >= blockStart + blockLength) {
+            int length = (int) Math.min(BLOCK_SIZE, size - position);
+            block = fetch(position, length);
+            blockStart = position;
+            blockLength = block.length;
+        }
+        int offset = (int) (position - blockStart);
+        int count = Math.min(wanted, blockLength - offset);
+        destination.put(block, offset, count);
+        position += count;
+        return count;
+    }
+
+    private byte[] fetch(long start, int length) throws IOException {
         GetObjectRequest.Builder request =
                 GetObjectRequest.builder()
                         .bucket(location.bucket)
                         .key(location.key)
-                        .range("bytes=" + position + "-" + (position + count - 1));
+                        .range("bytes=" + start + "-" + (start + length - 1));
         if (versionId != null) {
             request.versionId(versionId);
         } else if (eTag != null) {
@@ -89,13 +120,11 @@ final class S3SeekableInput implements SeekableInput {
             ResponseBytes<GetObjectResponse> response =
                     client.getObject(request.build(), ResponseTransformer.toBytes());
             byte[] bytes = response.asByteArray();
-            if (bytes.length != count) {
+            if (bytes.length != length) {
                 throw new IOException(
-                        "S3 returned " + bytes.length + " bytes for requested range of " + count);
+                        "S3 returned " + bytes.length + " bytes for requested range of " + length);
             }
-            destination.put(bytes);
-            position += bytes.length;
-            return bytes.length;
+            return bytes;
         } catch (IOException exception) {
             throw exception;
         } catch (RuntimeException exception) {
@@ -106,6 +135,8 @@ final class S3SeekableInput implements SeekableInput {
     @Override
     public void close() {
         closed = true;
+        block = NO_BLOCK;
+        blockLength = 0;
     }
 
     private void requireOpen() throws IOException {
