@@ -25,6 +25,7 @@ on:
       - 'maven-projects/pom.xml'
       - 'maven-projects/storage-api/**'
       - 'maven-projects/storage-local/**'
+      - 'maven-projects/storage-s3/**'
       - 'maven-projects/io-api/**'
       - 'maven-projects/io-parquet/**'
       - 'maven-projects/core/**'
@@ -38,6 +39,7 @@ on:
       - 'maven-projects/pom.xml'
       - 'maven-projects/storage-api/**'
       - 'maven-projects/storage-local/**'
+      - 'maven-projects/storage-s3/**'
       - 'maven-projects/io-api/**'
       - 'maven-projects/io-parquet/**'
       - 'maven-projects/core/**'
@@ -53,7 +55,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     env:
-      SDK_MODULES: storage-api
+      SDK_MODULES: storage-api,storage-local,io-api,storage-s3
     steps:
       - uses: actions/checkout@v7
         with:
