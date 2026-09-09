@@ -24,17 +24,23 @@ import java.util.Objects;
 
 /** A validated ordered-layout offset chunk with one more value than local vertices. */
 public final class OffsetChunk {
+    private final long vertexChunkIndex;
     private final long[] offsets;
 
-    private OffsetChunk(long[] offsets) {
+    private OffsetChunk(long vertexChunkIndex, long[] offsets) {
+        this.vertexChunkIndex = vertexChunkIndex;
         this.offsets = offsets;
     }
 
     /**
-     * Creates an immutable offset chunk. Values must start at zero and be non-negative and
-     * monotonic.
+     * Creates an immutable offset chunk read from the offset file of {@code vertexChunkIndex}.
+     * Values must start at zero and be non-negative and monotonic.
      */
-    public static OffsetChunk of(long[] offsets) {
+    public static OffsetChunk of(long vertexChunkIndex, long[] offsets) {
+        if (vertexChunkIndex < 0) {
+            throw new IllegalArgumentException(
+                    "Vertex chunk index must be non-negative: " + vertexChunkIndex);
+        }
         Objects.requireNonNull(offsets, "Offset values cannot be null.");
         if (offsets.length < 2) {
             throw new IllegalArgumentException("An offset chunk must contain at least two values.");
@@ -57,7 +63,12 @@ public final class OffsetChunk {
             }
             previous = current;
         }
-        return new OffsetChunk(copy);
+        return new OffsetChunk(vertexChunkIndex, copy);
+    }
+
+    /** Returns the vertex chunk this offset chunk was read from. */
+    public long vertexChunkIndex() {
+        return vertexChunkIndex;
     }
 
     /** Returns the number of local vertices represented by this chunk. */
@@ -88,5 +99,16 @@ public final class OffsetChunk {
             throw new IllegalArgumentException(
                     "Final offset must equal edge count: " + finalOffset + " != " + edgeCount);
         }
+    }
+
+    @Override
+    public String toString() {
+        return "OffsetChunk{vertexChunk="
+                + vertexChunkIndex
+                + ", vertexCount="
+                + vertexCount()
+                + ", edgeCount="
+                + offsets[offsets.length - 1]
+                + "}";
     }
 }

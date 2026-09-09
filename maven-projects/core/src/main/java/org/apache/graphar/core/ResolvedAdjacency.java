@@ -78,4 +78,17 @@ public final class ResolvedAdjacency {
         return edgeInfo.getAdjacentListChunkUri(
                 adjListType, offsetLocation.vertexChunkIndex(), edgeChunkIndex);
     }
+
+    @Override
+    public String toString() {
+        return "ResolvedAdjacency{adjListType="
+                + adjListType
+                + ", offsetLocation="
+                + offsetLocation
+                + ", edgeRange="
+                + edgeRange
+                + ", edgeChunks="
+                + edgeChunks
+                + "}";
+    }
 }

@@ -67,8 +67,17 @@ public final class OrderedAdjacencyResolver {
 
     /** Resolves a vertex using a complete, validated offset chunk read by a physical backend. */
     public ResolvedAdjacency resolve(long vertexId, OffsetChunk offsetChunk) {
-        OffsetLocation offsetLocation = locate(vertexId);
         Objects.requireNonNull(offsetChunk, "Offset chunk cannot be null.");
+        OffsetLocation offsetLocation = locate(vertexId);
+        if (offsetChunk.vertexChunkIndex() != offsetLocation.vertexChunkIndex()) {
+            throw new IllegalArgumentException(
+                    "Offset chunk "
+                            + offsetChunk.vertexChunkIndex()
+                            + " does not hold vertex "
+                            + vertexId
+                            + ", which lives in vertex chunk "
+                            + offsetLocation.vertexChunkIndex());
+        }
         return resolved(offsetLocation, offsetChunk.rangeFor(offsetLocation.offsetIndex()));
     }
 

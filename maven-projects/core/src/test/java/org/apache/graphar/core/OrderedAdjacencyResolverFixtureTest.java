@@ -21,6 +21,7 @@ package org.apache.graphar.core;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
@@ -47,22 +48,22 @@ public class OrderedAdjacencyResolverFixtureTest {
                         .loadEdgeInfo(fixtureRoot.resolve("person_knows_person.edge.yml").toUri());
         OrderedAdjacencyResolver resolver =
                 new OrderedAdjacencyResolver(edgeInfo, AdjListType.ordered_by_source);
-        OffsetChunk offsets = OffsetChunk.of(offsetsForCanonicalVertex297());
+        OffsetChunk offsets = OffsetChunk.of(2, offsetsForCanonicalVertex297());
 
         assertEquals(100, offsets.vertexCount());
         offsets.validateEdgeCount(1077);
 
         ResolvedAdjacency resolved = resolver.resolve(297, offsets);
 
-        assertEquals(2, resolved.offsetLocation().vertexChunkIndex());
-        assertEquals(97, resolved.offsetLocation().offsetIndex());
         assertEquals(
-                URI.create("edge/person_knows_person/ordered_by_source/offset/chunk2"),
-                resolved.offsetLocation().offsetChunkUri());
-        assertEquals(1008, resolved.edgeRange().begin());
-        assertEquals(1061, resolved.edgeRange().end());
-        assertEquals(0, resolved.edgeChunks().begin());
-        assertEquals(2, resolved.edgeChunks().end());
+                new OffsetLocation(
+                        297,
+                        2,
+                        97,
+                        URI.create("edge/person_knows_person/ordered_by_source/offset/chunk2")),
+                resolved.offsetLocation());
+        assertEquals(EdgeRange.fromOffsets(1008, 1061), resolved.edgeRange());
+        assertEquals(new ChunkRange(0, 2), resolved.edgeChunks());
         assertEquals(
                 URI.create("edge/person_knows_person/ordered_by_source/adj_list/part2/chunk0"),
                 resolved.adjacencyChunkUri(0));
@@ -99,8 +100,41 @@ public class OrderedAdjacencyResolverFixtureTest {
 
         assertThrows(IllegalArgumentException.class, () -> ChunkMath.chunkIndex(-1, 1));
         assertThrows(IllegalArgumentException.class, () -> EdgeRange.fromOffsets(5, 4));
-        assertThrows(IllegalArgumentException.class, () -> OffsetChunk.of(new long[] {1, 1}));
-        assertThrows(IllegalArgumentException.class, () -> OffsetChunk.of(new long[] {0, 2, 1}));
+        assertThrows(IllegalArgumentException.class, () -> OffsetChunk.of(0, new long[] {1, 1}));
+        assertThrows(IllegalArgumentException.class, () -> OffsetChunk.of(0, new long[] {0, 2, 1}));
+        assertThrows(IllegalArgumentException.class, () -> OffsetChunk.of(-1, new long[] {0, 1}));
+    }
+
+    @Test
+    public void rejectsAnOffsetChunkReadFromAnotherVertexChunk() throws Exception {
+        Path fixtureRoot = canonicalFixtureRoot();
+        Assume.assumeTrue(
+                "The canonical GraphAr testing fixtures are unavailable."
+                        + " Set GAR_TEST_DATA to the testing directory to run this test.",
+                fixtureRoot != null);
+        EdgeInfo edgeInfo =
+                new LocalFileSystemStringGraphInfoLoader()
+                        .loadEdgeInfo(fixtureRoot.resolve("person_knows_person.edge.yml").toUri());
+        OrderedAdjacencyResolver resolver =
+                new OrderedAdjacencyResolver(edgeInfo, AdjListType.ordered_by_source);
+        OffsetChunk wrongChunk = OffsetChunk.of(1, offsetsForCanonicalVertex297());
+
+        IllegalArgumentException failure =
+                assertThrows(
+                        IllegalArgumentException.class, () -> resolver.resolve(297, wrongChunk));
+
+        assertTrue(failure.getMessage(), failure.getMessage().contains("vertex chunk 2"));
+    }
+
+    @Test
+    public void describesRangesAsValues() {
+        assertEquals(new ChunkRange(0, 2), new ChunkRange(0, 2));
+        assertEquals(new ChunkRange(0, 2).hashCode(), new ChunkRange(0, 2).hashCode());
+        assertNotEquals(new ChunkRange(0, 2), new ChunkRange(0, 3));
+        assertEquals(EdgeRange.fromOffsets(3, 7), EdgeRange.fromOffsets(3, 7));
+        assertNotEquals(EdgeRange.fromOffsets(3, 7), EdgeRange.fromOffsets(3, 8));
+        assertEquals("ChunkRange[0, 2)", new ChunkRange(0, 2).toString());
+        assertEquals("EdgeRange[3, 7)", EdgeRange.fromOffsets(3, 7).toString());
     }
 
     /**

@@ -19,6 +19,8 @@
 
 package org.apache.graphar.core;
 
+import java.util.Objects;
+
 /** A validated half-open range of edge rows within one GraphAr vertex partition. */
 public final class EdgeRange {
     private final long begin;
@@ -90,11 +92,32 @@ public final class EdgeRange {
      * @return the chunk range intersecting this edge range
      */
     public ChunkRange edgeChunks(long edgeChunkSize) {
-        ChunkMath.validateChunkSize(edgeChunkSize);
-        long first = begin / edgeChunkSize;
+        long first = ChunkMath.chunkIndex(begin, edgeChunkSize);
         if (isEmpty()) {
             return new ChunkRange(first, first);
         }
-        return new ChunkRange(first, 1 + (end - 1) / edgeChunkSize);
+        return new ChunkRange(first, ChunkMath.chunkCount(end, edgeChunkSize));
+    }
+
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof EdgeRange)) {
+            return false;
+        }
+        EdgeRange that = (EdgeRange) other;
+        return begin == that.begin && end == that.end;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(begin, end);
+    }
+
+    @Override
+    public String toString() {
+        return "EdgeRange[" + begin + ", " + end + ")";
     }
 }

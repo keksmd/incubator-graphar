@@ -19,6 +19,8 @@
 
 package org.apache.graphar.core;
 
+import java.util.Objects;
+
 /** A half-open range of non-negative chunk indexes. */
 public final class ChunkRange {
     private final long begin;
@@ -77,5 +79,27 @@ public final class ChunkRange {
      */
     public boolean contains(long chunkIndex) {
         return chunkIndex >= begin && chunkIndex < end;
+    }
+
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof ChunkRange)) {
+            return false;
+        }
+        ChunkRange that = (ChunkRange) other;
+        return begin == that.begin && end == that.end;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(begin, end);
+    }
+
+    @Override
+    public String toString() {
+        return "ChunkRange[" + begin + ", " + end + ")";
     }
 }
