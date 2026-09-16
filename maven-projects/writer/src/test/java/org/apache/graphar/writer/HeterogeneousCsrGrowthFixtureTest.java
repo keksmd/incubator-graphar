@@ -43,7 +43,7 @@ import org.apache.graphar.io.BatchCursor;
 import org.apache.graphar.io.ColumnType;
 import org.apache.graphar.io.Field;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
+import org.apache.graphar.io.RecordBatches;
 import org.apache.graphar.io.Schema;
 import org.apache.graphar.io.WriteMode;
 import org.apache.graphar.io.parquet.ParquetPhysicalReader;
@@ -309,27 +309,7 @@ public class HeterogeneousCsrGrowthFixtureTest {
     }
 
     private static BatchCursor rows(Schema schema, List<Object[]> values) {
-        List<Row> rows = new ArrayList<>();
-        for (Object[] value : values) {
-            rows.add(index -> value[index]);
-        }
-        RecordBatch batch =
-                new RecordBatch() {
-                    @Override
-                    public Schema schema() {
-                        return schema;
-                    }
-
-                    @Override
-                    public int rowCount() {
-                        return rows.size();
-                    }
-
-                    @Override
-                    public Row row(int index) {
-                        return rows.get(index);
-                    }
-                };
+        RecordBatch batch = RecordBatches.ofArrays(schema, values);
         return new BatchCursor() {
             private boolean available = true;
 
