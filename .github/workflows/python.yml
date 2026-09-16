@@ -42,63 +42,79 @@ concurrency:
 
 jobs:
   ubuntu:
-    name: Ubuntu 22.04 Python
-    runs-on: ubuntu-latest
+    name: Ubuntu 24.04 Python
+    # Pinned, not ubuntu-latest: the Arrow apt packages are versioned per
+    # distro codename (24.0.0-1 exists for noble), and a mutable label would
+    # break the pinned apt install when GitHub rolls the label forward.
+    runs-on: ubuntu-24.04
     env:
       GAR_TEST_DATA: ${{ github.workspace }}/graphar-testing/
+      # Single source of version for Arrow. Must match the pyarrow pinned in
+      # python/pyproject.toml (pyarrow == 24.0.0). The "-1" suffix is the
+      # Debian package revision that apt requires for exact version matching.
+      ARROW_VERSION: "24.0.0-1"
 
     steps:
-    - uses: actions/checkout@v4
+    # fetch-depth 0 is required: the package version is derived from git tags
+    # by setuptools-scm (python/pyproject.toml), and a shallow checkout has no
+    # tags, which would make the build fail or produce a bogus version.
+    - uses: actions/checkout@v7
       with:
           submodules: true
+          fetch-depth: 0
 
     - name: Install Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v6
       with:
         python-version: '3.10'
 
     - name: Install dependencies
       run: |
-
-        # install the latest arrow deb to test arrow
-        wget -c https://apache.jfrog.io/artifactory/arrow/"$(lsb_release --id --short | tr 'A-Z' 'a-z')"/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb \
-            -P /tmp/
-        sudo apt-get install -y /tmp/apache-arrow-apt-source-latest-"$(lsb_release --codename --short)".deb
-        sudo apt-get update -y
-        sudo apt install -y libarrow-dev \
-                            libarrow-dataset-dev \
-                            libarrow-acero-dev \
-                            libparquet-dev
+        sudo apt update
+        sudo apt install -y -V ca-certificates lsb-release wget
+        wget https://packages.apache.org/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
+        sudo apt install -y -V ./apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
+        sudo apt update
+        # The Python extension links Arrow, ArrowDataset, ArrowAcero and Parquet
+        # (see python/CMakeLists.txt), so all dev packages are required. They
+        # must be installed in a single apt invocation with the version pinned:
+        # the 24.0.0-1 dev packages depend on each other with exact (=) version
+        # constraints, and apt does not resolve an exact version dependency when
+        # a newer candidate (25.x) exists in the repository, so installing them
+        # one by one fails.
+        sudo apt install -y -V libarrow-dev=$ARROW_VERSION \
+                            libarrow-dataset-dev=$ARROW_VERSION \
+                            libarrow-acero-dev=$ARROW_VERSION \
+                            libarrow-compute-dev=$ARROW_VERSION \
+                            libparquet-dev=$ARROW_VERSION
         sudo apt-get install -y ccache libcurl4-openssl-dev
         git clone https://github.com/apache/incubator-graphar-testing.git $GAR_TEST_DATA --depth 1
 
     - name: Install GraphAr Python SDK
       working-directory: "python"
       run: |
-        pip install ./ -v
-
-    - name: Install Poetry
-      working-directory: python
-      run: |
         pip install poetry --quiet
+        poetry env use python3
+        poetry install --with test --no-root
+        poetry run pip install . -v
 
     - name: Run Cli Test
       working-directory: "python"
       run: |
-        graphar --help
-        graphar check -p ../testing/neo4j/MovieGraph.graph.yml
-        graphar show -p ../testing/neo4j/MovieGraph.graph.yml -v Person
-        graphar show -p ../testing/neo4j/MovieGraph.graph.yml -es Person -e ACTED_IN -ed Movie
-        graphar import -c ../testing/neo4j/data/import.mini.yml
+        poetry run graphar --help
+        poetry run graphar check -p ../testing/neo4j/MovieGraph.graph.yml
+        poetry run graphar show -p ../testing/neo4j/MovieGraph.graph.yml -v Person
+        poetry run graphar show -p ../testing/neo4j/MovieGraph.graph.yml -es Person -e ACTED_IN -ed Movie
+        poetry run graphar import -c ../testing/neo4j/data/import.mini.yml
 
     - name: Run pytest
       working-directory: "python"
       run: |
-        pytest test -v
+        poetry run pytest -vvv
 
 
     - name: Upload coverage reports to Codecov
-      uses: codecov/codecov-action@v4.0.1
+      uses: codecov/codecov-action@v7
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
 
@@ -110,43 +126,113 @@ jobs:
 
   macos:
     name: macos latest Python
-    runs-on: macos-latest
+    # Pinned, not macos-latest: the runner OS also sets the effective macOS
+    # deployment target of the built artifacts, so a mutable label could change
+    # the produced wheel/extension compatibility without any code change.
+    runs-on: macos-15
     env:
       GAR_TEST_DATA: ${{ github.workspace }}/graphar-testing/
+      # Must match the pyarrow pinned in python/pyproject.toml (pyarrow == 24.0.0).
+      ARROW_VERSION: "24.0.0"
+      # Where the Arrow built from source below is installed. CMAKE_PREFIX_PATH
+      # makes the graphar Python build (scikit-build-core) link against that
+      # Arrow at build time; at runtime Arrow is resolved from the sibling
+      # pyarrow package instead (see the RPATH setup in python/CMakeLists.txt).
+      CMAKE_PREFIX_PATH: ${{ github.workspace }}/arrow-dist
 
     steps:
-    - uses: actions/checkout@v4
+    # fetch-depth 0 is required: the package version is derived from git tags
+    # by setuptools-scm (python/pyproject.toml), and a shallow checkout has no
+    # tags, which would make the build fail or produce a bogus version.
+    - uses: actions/checkout@v7
       with:
           submodules: true
+          fetch-depth: 0
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: '3.13'
+
+    - name: Cache Arrow build
+      id: arrow-cache
+      uses: actions/cache@v6
+      with:
+        path: ${{ env.CMAKE_PREFIX_PATH }}
+        # The hash of this workflow is part of the key so that changing the
+        # Arrow CMake flags below invalidates the cached build.
+        key: arrow-${{ runner.os }}-${{ runner.arch }}-${{ env.ARROW_VERSION }}-${{ hashFiles('.github/workflows/python.yml') }}
 
     - name: Install dependencies
       run: |
         brew bundle --file=cpp/Brewfile
-
+        # Homebrew's apache-arrow is built without ORC support, so it is removed
+        # here and Arrow is built from source in the next step (with ARROW_ORC).
+        brew uninstall apache-arrow || true
         git clone https://github.com/apache/incubator-graphar-testing.git $GAR_TEST_DATA --depth 1
+
+    - name: Build Arrow from source (with ORC)
+      if: steps.arrow-cache.outputs.cache-hit != 'true'
+      run: |
+        set -euxo pipefail
+        curl -fLsS -o "apache-arrow-${ARROW_VERSION}.tar.gz" \
+          "https://archive.apache.org/dist/arrow/arrow-${ARROW_VERSION}/apache-arrow-${ARROW_VERSION}.tar.gz"
+        tar xzf "apache-arrow-${ARROW_VERSION}.tar.gz"
+        cmake -S "apache-arrow-${ARROW_VERSION}/cpp" -B arrow-build \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_INSTALL_PREFIX="${CMAKE_PREFIX_PATH}" \
+          -DCMAKE_INSTALL_LIBDIR=lib \
+          -DARROW_BUILD_SHARED=ON \
+          -DARROW_BUILD_STATIC=OFF \
+          -DARROW_DEPENDENCY_SOURCE=BUNDLED \
+          -DARROW_PARQUET=ON \
+          -DARROW_DATASET=ON \
+          -DARROW_ACERO=ON \
+          -DARROW_ORC=ON \
+          -DARROW_CSV=ON \
+          -DARROW_JSON=ON \
+          -DARROW_COMPUTE=ON \
+          -DARROW_FILESYSTEM=ON \
+          -DARROW_WITH_SNAPPY=ON \
+          -DARROW_WITH_ZSTD=ON \
+          -DARROW_WITH_LZ4=ON \
+          -DARROW_WITH_BZ2=ON \
+          -DARROW_WITH_BROTLI=ON \
+          -DARROW_WITH_ZLIB=ON \
+          -DARROW_WITH_UTF8PROC=ON \
+          -DARROW_WITH_RE2=ON \
+          -DARROW_S3=OFF \
+          -DARROW_GCS=OFF \
+          -DARROW_AZURE=OFF \
+          -DARROW_FLIGHT=OFF \
+          -DARROW_JEMALLOC=OFF \
+          -DARROW_MIMALLOC=OFF \
+          -DARROW_BUILD_TESTS=OFF \
+          -DARROW_BUILD_BENCHMARKS=OFF \
+          -DARROW_BUILD_EXAMPLES=OFF \
+          -DARROW_BUILD_INTEGRATION=OFF \
+          -DARROW_BUILD_UTILITIES=OFF \
+          -DARROW_PYTHON=OFF
+        cmake --build arrow-build --target install -j "$(sysctl -n hw.ncpu)"
 
     - name: Install GraphAr Python SDK
       working-directory: "python"
       run: |
-        pip install ./ -v
+        pip install poetry --quiet
+        poetry env use python3
+        poetry install --with test --no-root
+        poetry run pip install . -v
+
     - name: Run Cli Test
       working-directory: "python"
       run: |
-        graphar --help
-        graphar --version
-        graphar check -p ../testing/neo4j/MovieGraph.graph.yml
-        graphar show -p ../testing/neo4j/MovieGraph.graph.yml -v Person
-        graphar show -p ../testing/neo4j/MovieGraph.graph.yml -es Person -e ACTED_IN -ed Movie
+        poetry run graphar --help
+        poetry run graphar check -p ../testing/neo4j/MovieGraph.graph.yml
+        poetry run graphar show -p ../testing/neo4j/MovieGraph.graph.yml -v Person
+        poetry run graphar show -p ../testing/neo4j/MovieGraph.graph.yml -es Person -e ACTED_IN -ed Movie
+        poetry run graphar import -c ../testing/neo4j/data/import.mini.yml
 
     - name: Run pytest
       working-directory: "python"
       run: |
-        pytest test -v
-
-      
-# TODO: Add unit tests
+        poetry run pytest -vvv

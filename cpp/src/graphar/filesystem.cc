@@ -22,6 +22,7 @@
 #include "graphar/writer_util.h"
 #ifdef ARROW_ORC
 #include "arrow/adapters/orc/adapter.h"
+#include "arrow/util/config.h"
 #endif
 #include <arrow/compute/api.h>
 #include "arrow/api.h"
@@ -99,7 +100,7 @@ Status EnsureDatasetScannerInitialized() {
   static bool initialized = false;
   static Status init_status = Status::OK();
   if (!initialized) {
-#if ARROW_VERSION >= 21000000
+#if defined(ARROW_VERSION) && ARROW_VERSION >= 21000000
     auto st = arrow::compute::Initialize();
     if (!st.ok()) {
       init_status = Status::ArrowError(st.ToString());

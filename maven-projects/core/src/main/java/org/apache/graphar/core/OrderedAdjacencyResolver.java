@@ -27,24 +27,33 @@ import org.apache.graphar.info.type.AdjListType;
 /** Resolves GraphAr ordered adjacency metadata into offset and edge-chunk locations. */
 public final class OrderedAdjacencyResolver {
     private final EdgeInfo edgeInfo;
-    private final AdjacencyOrdering ordering;
     private final AdjListType adjListType;
+    private final long vertexChunkSize;
 
     public OrderedAdjacencyResolver(EdgeInfo edgeInfo, AdjListType adjListType) {
         this.edgeInfo = Objects.requireNonNull(edgeInfo, "Edge info cannot be null.");
-        this.ordering = AdjacencyOrdering.of(edgeInfo, adjListType);
-        this.adjListType = adjListType;
-    }
-
-    /** Returns the physical ordering this resolver addresses. */
-    public AdjacencyOrdering ordering() {
-        return ordering;
+        this.adjListType =
+                Objects.requireNonNull(adjListType, "Adjacency list type cannot be null.");
+        if (!adjListType.isOrdered()) {
+            throw new IllegalArgumentException(
+                    "An ordered adjacency resolver requires an ordered layout: " + adjListType);
+        }
+        if (!edgeInfo.hasAdjListType(adjListType)) {
+            throw new IllegalArgumentException(
+                    "Edge info does not declare adjacency layout: " + adjListType);
+        }
+        this.vertexChunkSize =
+                adjListType == AdjListType.ordered_by_source
+                        ? edgeInfo.getSrcChunkSize()
+                        : edgeInfo.getDstChunkSize();
+        ChunkMath.validateChunkSize(vertexChunkSize);
+        ChunkMath.validateChunkSize(edgeInfo.getChunkSize());
     }
 
     /** Locates the offset pair that the physical reader must fetch for {@code vertexId}. */
     public OffsetLocation locate(long vertexId) {
-        long vertexChunkIndex = ordering.vertexChunk(vertexId);
-        long offsetIndex = ChunkMath.offsetInChunk(vertexId, ordering.vertexChunkSize());
+        long vertexChunkIndex = ChunkMath.chunkIndex(vertexId, vertexChunkSize);
+        long offsetIndex = ChunkMath.offsetInChunk(vertexId, vertexChunkSize);
         URI offsetChunkUri = edgeInfo.getOffsetChunkUri(adjListType, vertexChunkIndex);
         return new OffsetLocation(vertexId, vertexChunkIndex, offsetIndex, offsetChunkUri);
     }
@@ -58,8 +67,17 @@ public final class OrderedAdjacencyResolver {
 
     /** Resolves a vertex using a complete, validated offset chunk read by a physical backend. */
     public ResolvedAdjacency resolve(long vertexId, OffsetChunk offsetChunk) {
-        OffsetLocation offsetLocation = locate(vertexId);
         Objects.requireNonNull(offsetChunk, "Offset chunk cannot be null.");
+        OffsetLocation offsetLocation = locate(vertexId);
+        if (offsetChunk.vertexChunkIndex() != offsetLocation.vertexChunkIndex()) {
+            throw new IllegalArgumentException(
+                    "Offset chunk "
+                            + offsetChunk.vertexChunkIndex()
+                            + " does not hold vertex "
+                            + vertexId
+                            + ", which lives in vertex chunk "
+                            + offsetLocation.vertexChunkIndex());
+        }
         return resolved(offsetLocation, offsetChunk.rangeFor(offsetLocation.offsetIndex()));
     }
 
@@ -69,6 +87,6 @@ public final class OrderedAdjacencyResolver {
                 adjListType,
                 offsetLocation,
                 edgeRange,
-                edgeRange.edgeChunks(ordering.edgeChunkSize()));
+                edgeRange.edgeChunks(edgeInfo.getChunkSize()));
     }
 }

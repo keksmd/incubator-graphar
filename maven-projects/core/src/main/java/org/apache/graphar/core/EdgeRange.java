@@ -19,6 +19,8 @@
 
 package org.apache.graphar.core;
 
+import java.util.Objects;
+
 /** A validated half-open range of edge rows within one GraphAr vertex partition. */
 public final class EdgeRange {
     private final long begin;
@@ -29,7 +31,13 @@ public final class EdgeRange {
         this.end = end;
     }
 
-    /** Creates an edge range from the two adjacent values of an ordered offset table. */
+    /**
+     * Creates an edge range from the two adjacent values of an ordered offset table.
+     *
+     * @param begin the first included edge row
+     * @param end the first excluded edge row
+     * @return the validated half-open edge range
+     */
     public static EdgeRange fromOffsets(long begin, long end) {
         if (begin < 0) {
             throw new IllegalArgumentException("Edge range begin must be non-negative: " + begin);
@@ -41,33 +49,75 @@ public final class EdgeRange {
         return new EdgeRange(begin, end);
     }
 
-    /** Returns the first included edge row. */
+    /**
+     * Returns the first included edge row.
+     *
+     * @return the first included edge row
+     */
     public long begin() {
         return begin;
     }
 
-    /** Returns the first excluded edge row. */
+    /**
+     * Returns the first excluded edge row.
+     *
+     * @return the first excluded edge row
+     */
     public long end() {
         return end;
     }
 
-    /** Returns the number of selected edge rows. */
+    /**
+     * Returns the number of selected edge rows.
+     *
+     * @return the number of selected edge rows
+     */
     public long length() {
         return end - begin;
     }
 
-    /** Returns whether this range selects no edge rows. */
+    /**
+     * Returns whether this range selects no edge rows.
+     *
+     * @return whether the range is empty
+     */
     public boolean isEmpty() {
         return begin == end;
     }
 
-    /** Returns the half-open range of edge chunks intersecting this edge range. */
+    /**
+     * Returns the half-open range of edge chunks intersecting this edge range.
+     *
+     * @param edgeChunkSize a positive number of edge rows per chunk
+     * @return the chunk range intersecting this edge range
+     */
     public ChunkRange edgeChunks(long edgeChunkSize) {
-        ChunkMath.validateChunkSize(edgeChunkSize);
-        long first = begin / edgeChunkSize;
+        long first = ChunkMath.chunkIndex(begin, edgeChunkSize);
         if (isEmpty()) {
             return new ChunkRange(first, first);
         }
-        return new ChunkRange(first, 1 + (end - 1) / edgeChunkSize);
+        return new ChunkRange(first, ChunkMath.chunkCount(end, edgeChunkSize));
+    }
+
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof EdgeRange)) {
+            return false;
+        }
+        EdgeRange that = (EdgeRange) other;
+        return begin == that.begin && end == that.end;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(begin, end);
+    }
+
+    @Override
+    public String toString() {
+        return "EdgeRange[" + begin + ", " + end + ")";
     }
 }

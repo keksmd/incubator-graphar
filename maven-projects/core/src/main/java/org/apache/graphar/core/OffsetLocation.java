@@ -53,4 +53,37 @@ public final class OffsetLocation {
     public URI offsetChunkUri() {
         return offsetChunkUri;
     }
+
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof OffsetLocation)) {
+            return false;
+        }
+        OffsetLocation that = (OffsetLocation) other;
+        return vertexId == that.vertexId
+                && vertexChunkIndex == that.vertexChunkIndex
+                && offsetIndex == that.offsetIndex
+                && offsetChunkUri.equals(that.offsetChunkUri);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(vertexId, vertexChunkIndex, offsetIndex, offsetChunkUri);
+    }
+
+    @Override
+    public String toString() {
+        return "OffsetLocation{vertexId="
+                + vertexId
+                + ", vertexChunk="
+                + vertexChunkIndex
+                + ", offsetIndex="
+                + offsetIndex
+                + ", offsetChunkUri="
+                + offsetChunkUri
+                + "}";
+    }
 }

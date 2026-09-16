@@ -19,11 +19,19 @@
 
 package org.apache.graphar.core;
 
+import java.util.Objects;
+
 /** A half-open range of non-negative chunk indexes. */
 public final class ChunkRange {
     private final long begin;
     private final long end;
 
+    /**
+     * Creates a chunk range.
+     *
+     * @param begin the first included non-negative chunk index
+     * @param end the first excluded chunk index
+     */
     public ChunkRange(long begin, long end) {
         if (begin < 0) {
             throw new IllegalArgumentException("Chunk range begin must be non-negative: " + begin);
@@ -36,23 +44,62 @@ public final class ChunkRange {
         this.end = end;
     }
 
-    /** Returns the first included chunk index. */
+    /**
+     * Returns the first included chunk index.
+     *
+     * @return the first included chunk index
+     */
     public long begin() {
         return begin;
     }
 
-    /** Returns the first excluded chunk index. */
+    /**
+     * Returns the first excluded chunk index.
+     *
+     * @return the first excluded chunk index
+     */
     public long end() {
         return end;
     }
 
-    /** Returns whether this range selects no chunks. */
+    /**
+     * Returns whether this range selects no chunks.
+     *
+     * @return whether the range is empty
+     */
     public boolean isEmpty() {
         return begin == end;
     }
 
-    /** Returns whether {@code chunkIndex} belongs to this range. */
+    /**
+     * Returns whether {@code chunkIndex} belongs to this range.
+     *
+     * @param chunkIndex a chunk index
+     * @return whether the chunk index belongs to this range
+     */
     public boolean contains(long chunkIndex) {
         return chunkIndex >= begin && chunkIndex < end;
+    }
+
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof ChunkRange)) {
+            return false;
+        }
+        ChunkRange that = (ChunkRange) other;
+        return begin == that.begin && end == that.end;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(begin, end);
+    }
+
+    @Override
+    public String toString() {
+        return "ChunkRange[" + begin + ", " + end + ")";
     }
 }

@@ -3,7 +3,7 @@
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
  * regarding copyright ownership.  The ASF licenses this file
- * to You under the Apache License, Version 2.0 (the
+ * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
  *
@@ -16,6 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+
 package org.apache.graphar.storage.s3;
 
 import java.io.IOException;
@@ -27,12 +28,14 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 
+/**
+ * Reads an object through range requests, keeping the last fetched block in memory so that the
+ * small sequential reads typical of columnar footers do not cost one round trip each. A read at
+ * least as large as the block size bypasses the buffer and is served by a single request.
+ */
 final class S3SeekableInput implements SeekableInput {
-    /**
-     * Parquet reads its footer, indexes and page headers in many small adjacent reads. Coalescing
-     * them is essential for S3, where every range request otherwise becomes an HTTP round-trip.
-     */
-    private static final int READ_AHEAD_BYTES = 64 * 1024;
+    private static final int BLOCK_SIZE = 1 << 20;
+    private static final byte[] NO_BLOCK = new byte[0];
 
     private final S3Client client;
     private final S3Storage.Location location;
@@ -40,8 +43,9 @@ final class S3SeekableInput implements SeekableInput {
     private final String versionId;
     private final String eTag;
     private long position;
-    private long bufferStart = -1;
-    private byte[] buffer = new byte[0];
+    private byte[] block = NO_BLOCK;
+    private long blockStart;
+    private int blockLength;
     private boolean closed;
 
     S3SeekableInput(
@@ -81,36 +85,32 @@ final class S3SeekableInput implements SeekableInput {
         if (position >= size) {
             return -1;
         }
-        int copied = 0;
-        while (destination.hasRemaining() && position < size) {
-            int available = bufferedBytes();
-            if (available == 0) {
-                readAhead();
-                available = bufferedBytes();
-            }
-            int count = Math.min(destination.remaining(), available);
-            destination.put(buffer, (int) (position - bufferStart), count);
-            position += count;
-            copied += count;
+        int wanted = (int) Math.min(destination.remaining(), size - position);
+        if (wanted >= BLOCK_SIZE) {
+            byte[] bytes = fetch(position, wanted);
+            destination.put(bytes);
+            position += bytes.length;
+            return bytes.length;
         }
-        return copied;
+        if (position < blockStart || position >= blockStart + blockLength) {
+            int length = (int) Math.min(BLOCK_SIZE, size - position);
+            block = fetch(position, length);
+            blockStart = position;
+            blockLength = block.length;
+        }
+        int offset = (int) (position - blockStart);
+        int count = Math.min(wanted, blockLength - offset);
+        destination.put(block, offset, count);
+        position += count;
+        return count;
     }
 
-    private int bufferedBytes() {
-        if (position < bufferStart || position >= bufferStart + buffer.length) {
-            return 0;
-        }
-        return (int) Math.min(bufferStart + buffer.length - position, Integer.MAX_VALUE);
-    }
-
-    private void readAhead() throws IOException {
-        long endExclusive = position + Math.min(size - position, READ_AHEAD_BYTES);
-        int count = (int) (endExclusive - position);
+    private byte[] fetch(long start, int length) throws IOException {
         GetObjectRequest.Builder request =
                 GetObjectRequest.builder()
                         .bucket(location.bucket)
                         .key(location.key)
-                        .range("bytes=" + position + "-" + (endExclusive - 1));
+                        .range("bytes=" + start + "-" + (start + length - 1));
         if (versionId != null) {
             request.versionId(versionId);
         } else if (eTag != null) {
@@ -120,12 +120,11 @@ final class S3SeekableInput implements SeekableInput {
             ResponseBytes<GetObjectResponse> response =
                     client.getObject(request.build(), ResponseTransformer.toBytes());
             byte[] bytes = response.asByteArray();
-            if (bytes.length != count) {
+            if (bytes.length != length) {
                 throw new IOException(
-                        "S3 returned " + bytes.length + " bytes for requested range of " + count);
+                        "S3 returned " + bytes.length + " bytes for requested range of " + length);
             }
-            bufferStart = position;
-            buffer = bytes;
+            return bytes;
         } catch (IOException exception) {
             throw exception;
         } catch (RuntimeException exception) {
@@ -136,6 +135,8 @@ final class S3SeekableInput implements SeekableInput {
     @Override
     public void close() {
         closed = true;
+        block = NO_BLOCK;
+        blockLength = 0;
     }
 
     private void requireOpen() throws IOException {

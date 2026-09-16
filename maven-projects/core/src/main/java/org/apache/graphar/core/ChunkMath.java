@@ -23,21 +23,39 @@ package org.apache.graphar.core;
 public final class ChunkMath {
     private ChunkMath() {}
 
-    /** Returns the chunk containing a non-negative element identifier. */
+    /**
+     * Returns the chunk containing a non-negative element identifier.
+     *
+     * @param elementId an element identifier
+     * @param chunkSize a positive chunk size
+     * @return the zero-based chunk index
+     */
     public static long chunkIndex(long elementId, long chunkSize) {
         validateElementId(elementId);
         validateChunkSize(chunkSize);
         return elementId / chunkSize;
     }
 
-    /** Returns an element's zero-based position inside its chunk. */
+    /**
+     * Returns an element's zero-based position inside its chunk.
+     *
+     * @param elementId an element identifier
+     * @param chunkSize a positive chunk size
+     * @return the zero-based offset within the chunk
+     */
     public static long offsetInChunk(long elementId, long chunkSize) {
         validateElementId(elementId);
         validateChunkSize(chunkSize);
         return elementId % chunkSize;
     }
 
-    /** Returns the number of chunks required for a non-negative number of elements. */
+    /**
+     * Returns the number of chunks required for a non-negative number of elements.
+     *
+     * @param elementCount a number of elements
+     * @param chunkSize a positive chunk size
+     * @return the number of chunks needed to contain the elements
+     */
     public static long chunkCount(long elementCount, long chunkSize) {
         if (elementCount < 0) {
             throw new IllegalArgumentException(

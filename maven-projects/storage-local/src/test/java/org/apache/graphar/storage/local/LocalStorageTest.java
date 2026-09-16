@@ -126,4 +126,24 @@ public class LocalStorageTest {
             assertThrows(IOException.class, () -> input.readFully(ByteBuffer.allocate(2)));
         }
     }
+
+    @Test
+    public void writesADirectBufferLargerThanOneTransferChunk() throws IOException {
+        Path path = temporaryFolder.getRoot().toPath().resolve("large.bin");
+        byte[] expected = new byte[20_000];
+        for (int index = 0; index < expected.length; index++) {
+            expected[index] = (byte) index;
+        }
+        ByteBuffer direct = ByteBuffer.allocateDirect(expected.length);
+        direct.put(expected);
+        direct.flip();
+
+        try (PositionOutput output = storage.outputFile(path.toUri()).create()) {
+            output.write(direct);
+            assertEquals(expected.length, output.position());
+        }
+
+        assertFalse(direct.hasRemaining());
+        assertArrayEquals(expected, Files.readAllBytes(path));
+    }
 }

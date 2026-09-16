@@ -19,7 +19,6 @@
     under the License.
 
 -->
-
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
@@ -35,7 +34,6 @@
     <artifactId>graphar-core</artifactId>
     <packaging>jar</packaging>
     <version>${graphar.version}</version>
-
     <name>graphar-core</name>
 
     <properties>
@@ -54,18 +52,6 @@
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
             <version>4.13.2</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.graphar</groupId>
-            <artifactId>graphar-io-parquet</artifactId>
-            <version>${graphar.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.graphar</groupId>
-            <artifactId>graphar-storage-local</artifactId>
-            <version>${graphar.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

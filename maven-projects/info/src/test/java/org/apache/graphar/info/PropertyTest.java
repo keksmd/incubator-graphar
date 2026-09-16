@@ -156,13 +156,9 @@ public class PropertyTest {
         Property prop2 = TestDataFactory.createProperty("id", DataType.INT32, true, false);
         Property prop3 = TestDataFactory.createProperty("name", DataType.STRING, false, true);
 
-        // Note: Property class doesn't override equals(), so this tests object identity
-        Assert.assertNotEquals(prop1, prop2); // Different objects
-        Assert.assertNotEquals(prop1, prop3); // Different properties
-
-        // Same object reference
-        Property sameRef = prop1;
-        Assert.assertEquals(prop1, sameRef);
+        Assert.assertEquals(prop1, prop2);
+        Assert.assertEquals(prop1.hashCode(), prop2.hashCode());
+        Assert.assertNotEquals(prop1, prop3);
     }
 
     @Test

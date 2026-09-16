@@ -24,6 +24,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -145,6 +146,25 @@ public class PropertyGroup implements Iterable<Property> {
 
         return true;
     }
+
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof PropertyGroup)) {
+            return false;
+        }
+        PropertyGroup propertyGroup = (PropertyGroup) other;
+        return propertyList.equals(propertyGroup.propertyList)
+                && fileType == propertyGroup.fileType
+                && Objects.equals(baseUri, propertyGroup.baseUri);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(propertyList, fileType, baseUri);
+    }
 }
 
 class PropertyGroups {
@@ -217,7 +237,7 @@ class PropertyGroups {
                         propertyGroupList.stream()
                                 .filter(
                                         existingPropertyGroup ->
-                                                existingPropertyGroup != propertyGroup)
+                                                !existingPropertyGroup.equals(propertyGroup))
                                 .collect(Collectors.toUnmodifiableList())));
     }
 
@@ -264,7 +284,8 @@ class PropertyGroups {
 
     PropertyGroup getPropertyGroupByIndex(int index) {
         if (index < 0 || index >= propertyGroupList.size()) {
-            return null;
+            throw new IllegalArgumentException(
+                    "Property group index " + index + " is out of range");
         }
         return propertyGroupList.get(index);
     }

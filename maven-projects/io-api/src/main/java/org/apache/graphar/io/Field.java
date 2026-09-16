@@ -50,4 +50,18 @@ public final class Field {
     public boolean nullable() {
         return nullable;
     }
+
+    @Override
+    public boolean equals(Object other) {
+        if (!(other instanceof Field)) {
+            return false;
+        }
+        Field that = (Field) other;
+        return nullable == that.nullable && name.equals(that.name) && type.equals(that.type);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(name, type, nullable);
+    }
 }

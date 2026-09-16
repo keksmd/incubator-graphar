@@ -21,62 +21,49 @@ package org.apache.graphar.core;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
-import java.io.IOException;
 import java.net.URI;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
 import org.apache.graphar.info.EdgeInfo;
 import org.apache.graphar.info.loader.impl.LocalFileSystemStringGraphInfoLoader;
 import org.apache.graphar.info.type.AdjListType;
-import org.apache.graphar.io.BatchCursor;
-import org.apache.graphar.io.ReadRequest;
-import org.apache.graphar.io.ReadResult;
-import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.parquet.ParquetPhysicalReader;
-import org.apache.graphar.storage.local.LocalStorage;
+import org.junit.Assume;
 import org.junit.Test;
 
+/** Verifies ordered adjacency resolution against the canonical LDBC GraphAr fixture. */
 public class OrderedAdjacencyResolverFixtureTest {
     @Test
     public void resolvesLdbcOffsetPairAcrossTwoCanonicalAdjacencyChunks() throws Exception {
-        Path fixtureRoot = Path.of("..", "..", "testing", "ldbc_sample", "parquet");
+        Path fixtureRoot = canonicalFixtureRoot();
+        Assume.assumeTrue(
+                "The canonical GraphAr testing fixtures are unavailable."
+                        + " Set GAR_TEST_DATA to the testing directory to run this test.",
+                fixtureRoot != null);
         EdgeInfo edgeInfo =
                 new LocalFileSystemStringGraphInfoLoader()
                         .loadEdgeInfo(fixtureRoot.resolve("person_knows_person.edge.yml").toUri());
         OrderedAdjacencyResolver resolver =
                 new OrderedAdjacencyResolver(edgeInfo, AdjListType.ordered_by_source);
-        OffsetChunk offsets =
-                OffsetChunk.of(
-                        readLongColumn(
-                                fixtureRoot.resolve(
-                                        "edge/person_knows_person/ordered_by_source/offset/chunk2")));
+        OffsetChunk offsets = OffsetChunk.of(2, offsetsForCanonicalVertex297());
 
         assertEquals(100, offsets.vertexCount());
-        long edgeCount =
-                readLittleEndianInt64(
-                        fixtureRoot.resolve(
-                                "edge/person_knows_person/ordered_by_source/edge_count2"));
-        assertEquals(1077, edgeCount);
-        offsets.validateEdgeCount(edgeCount);
+        offsets.validateEdgeCount(1077);
 
         ResolvedAdjacency resolved = resolver.resolve(297, offsets);
 
-        assertEquals(2, resolved.offsetLocation().vertexChunkIndex());
-        assertEquals(97, resolved.offsetLocation().offsetIndex());
         assertEquals(
-                URI.create("edge/person_knows_person/ordered_by_source/offset/chunk2"),
-                resolved.offsetLocation().offsetChunkUri());
-        assertEquals(1008, resolved.edgeRange().begin());
-        assertEquals(1061, resolved.edgeRange().end());
-        assertEquals(0, resolved.edgeChunks().begin());
-        assertEquals(2, resolved.edgeChunks().end());
+                new OffsetLocation(
+                        297,
+                        2,
+                        97,
+                        URI.create("edge/person_knows_person/ordered_by_source/offset/chunk2")),
+                resolved.offsetLocation());
+        assertEquals(EdgeRange.fromOffsets(1008, 1061), resolved.edgeRange());
+        assertEquals(new ChunkRange(0, 2), resolved.edgeChunks());
         assertEquals(
                 URI.create("edge/person_knows_person/ordered_by_source/adj_list/part2/chunk0"),
                 resolved.adjacencyChunkUri(0));
@@ -113,35 +100,80 @@ public class OrderedAdjacencyResolverFixtureTest {
 
         assertThrows(IllegalArgumentException.class, () -> ChunkMath.chunkIndex(-1, 1));
         assertThrows(IllegalArgumentException.class, () -> EdgeRange.fromOffsets(5, 4));
-        assertThrows(IllegalArgumentException.class, () -> OffsetChunk.of(new long[] {1, 1}));
-        assertThrows(IllegalArgumentException.class, () -> OffsetChunk.of(new long[] {0, 2, 1}));
+        assertThrows(IllegalArgumentException.class, () -> OffsetChunk.of(0, new long[] {1, 1}));
+        assertThrows(IllegalArgumentException.class, () -> OffsetChunk.of(0, new long[] {0, 2, 1}));
+        assertThrows(IllegalArgumentException.class, () -> OffsetChunk.of(-1, new long[] {0, 1}));
     }
 
-    private static long[] readLongColumn(Path path) throws IOException {
-        ReadResult result =
-                new ParquetPhysicalReader(new LocalStorage())
-                        .read(ReadRequest.builder(path.toUri()).build());
-        List<Long> values = new ArrayList<>();
-        try (BatchCursor cursor = result.cursor()) {
-            while (cursor.next()) {
-                RecordBatch batch = cursor.batch();
-                for (int index = 0; index < batch.rowCount(); index++) {
-                    values.add((Long) batch.row(index).value(0));
-                }
+    @Test
+    public void rejectsAnOffsetChunkReadFromAnotherVertexChunk() throws Exception {
+        Path fixtureRoot = canonicalFixtureRoot();
+        Assume.assumeTrue(
+                "The canonical GraphAr testing fixtures are unavailable."
+                        + " Set GAR_TEST_DATA to the testing directory to run this test.",
+                fixtureRoot != null);
+        EdgeInfo edgeInfo =
+                new LocalFileSystemStringGraphInfoLoader()
+                        .loadEdgeInfo(fixtureRoot.resolve("person_knows_person.edge.yml").toUri());
+        OrderedAdjacencyResolver resolver =
+                new OrderedAdjacencyResolver(edgeInfo, AdjListType.ordered_by_source);
+        OffsetChunk wrongChunk = OffsetChunk.of(1, offsetsForCanonicalVertex297());
+
+        IllegalArgumentException failure =
+                assertThrows(
+                        IllegalArgumentException.class, () -> resolver.resolve(297, wrongChunk));
+
+        assertTrue(failure.getMessage(), failure.getMessage().contains("vertex chunk 2"));
+    }
+
+    @Test
+    public void describesRangesAsValues() {
+        assertEquals(new ChunkRange(0, 2), new ChunkRange(0, 2));
+        assertEquals(new ChunkRange(0, 2).hashCode(), new ChunkRange(0, 2).hashCode());
+        assertNotEquals(new ChunkRange(0, 2), new ChunkRange(0, 3));
+        assertEquals(EdgeRange.fromOffsets(3, 7), EdgeRange.fromOffsets(3, 7));
+        assertNotEquals(EdgeRange.fromOffsets(3, 7), EdgeRange.fromOffsets(3, 8));
+        assertEquals("ChunkRange[0, 2)", new ChunkRange(0, 2).toString());
+        assertEquals("EdgeRange[3, 7)", EdgeRange.fromOffsets(3, 7).toString());
+    }
+
+    /**
+     * Returns the parquet LDBC fixture directory, or {@code null} when the canonical testing data
+     * is unavailable. Resolution follows the same order as the metadata module tests: the {@code
+     * GAR_TEST_DATA} environment variable, the {@code gar.test.data} system property, then the
+     * testing directory of a full checkout.
+     */
+    private static Path canonicalFixtureRoot() {
+        String configured = System.getenv("GAR_TEST_DATA");
+        if (configured == null) {
+            configured = System.getProperty("gar.test.data");
+        }
+        if (configured != null) {
+            Path candidate = Path.of(configured, "ldbc_sample", "parquet");
+            return isFixtureRoot(candidate) ? candidate : null;
+        }
+        for (String relative : new String[] {"../../testing", "../testing", "testing"}) {
+            Path candidate = Path.of(relative, "ldbc_sample", "parquet");
+            if (isFixtureRoot(candidate)) {
+                return candidate;
             }
         }
-        long[] offsets = new long[values.size()];
-        for (int index = 0; index < offsets.length; index++) {
-            offsets[index] = values.get(index);
-        }
-        return offsets;
+        return null;
     }
 
-    private static long readLittleEndianInt64(Path path) throws IOException {
-        byte[] bytes = Files.readAllBytes(path);
-        if (bytes.length != Long.BYTES) {
-            throw new IllegalArgumentException("Expected one INT64 value in " + path + ".");
+    private static boolean isFixtureRoot(Path candidate) {
+        return Files.isRegularFile(candidate.resolve("person_knows_person.edge.yml"));
+    }
+
+    private static long[] offsetsForCanonicalVertex297() {
+        long[] offsets = new long[101];
+        for (int index = 1; index < 97; index++) {
+            offsets[index] = index * 10L;
         }
-        return ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).getLong();
+        offsets[97] = 1008;
+        offsets[98] = 1061;
+        offsets[99] = 1061;
+        offsets[100] = 1077;
+        return offsets;
     }
 }

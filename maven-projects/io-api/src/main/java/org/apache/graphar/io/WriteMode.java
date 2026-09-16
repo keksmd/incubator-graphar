@@ -24,5 +24,7 @@ public enum WriteMode {
     /** Fail when the target already exists. */
     CREATE_NEW,
     /** Replace any existing target. */
-    OVERWRITE
+    OVERWRITE,
+    /** Add supplied batches after the existing physical data at the target. */
+    APPEND
 }

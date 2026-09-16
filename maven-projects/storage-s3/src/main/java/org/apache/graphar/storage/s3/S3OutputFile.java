@@ -23,13 +23,17 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.URI;
 import java.nio.ByteBuffer;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.apache.graphar.storage.OutputFile;
 import org.apache.graphar.storage.PositionOutput;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
+import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 
 final class S3OutputFile implements OutputFile {
     private final S3Client client;
@@ -49,7 +53,34 @@ final class S3OutputFile implements OutputFile {
 
     @Override
     public PositionOutput create() throws IOException {
+        failIfPresent();
         return open(true);
+    }
+
+    /**
+     * Rejects an existing object before any byte is staged, so that a caller learns about the
+     * conflict at open time the way the local adapter does. Only an absent object lets the caller
+     * proceed; a head request that fails for any other reason surfaces here rather than after a
+     * full staging pass.
+     *
+     * @throws FileAlreadyExistsException when the object is already present
+     * @throws IOException when the object cannot be inspected
+     */
+    private void failIfPresent() throws IOException {
+        try {
+            client.headObject(
+                    HeadObjectRequest.builder().bucket(location.bucket).key(location.key).build());
+        } catch (NoSuchKeyException absent) {
+            return;
+        } catch (S3Exception exception) {
+            if (exception.statusCode() == 404) {
+                return;
+            }
+            throw new IOException("Cannot inspect S3 object " + location.uri, exception);
+        } catch (RuntimeException exception) {
+            throw new IOException("Cannot inspect S3 object " + location.uri, exception);
+        }
+        throw new FileAlreadyExistsException(location.uri.toString());
     }
 
     @Override
@@ -127,6 +158,11 @@ final class S3OutputFile implements OutputFile {
                     request.ifNoneMatch("*");
                 }
                 client.putObject(request.build(), RequestBody.fromFile(stage));
+            } catch (S3Exception exception) {
+                if (createOnly && exception.statusCode() == 412) {
+                    throw new FileAlreadyExistsException(location.uri.toString());
+                }
+                throw new IOException("Cannot publish S3 object " + location.uri, exception);
             } catch (RuntimeException exception) {
                 throw new IOException("Cannot publish S3 object " + location.uri, exception);
             } finally {

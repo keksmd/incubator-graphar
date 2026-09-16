@@ -181,11 +181,18 @@ public class EdgeInfoTest {
 
         Assert.assertEquals(TestUtil.pg1, edgeInfo.getPropertyGroupByIndex(0));
         Assert.assertEquals(TestUtil.pg2, edgeInfo.getPropertyGroupByIndex(1));
-        Assert.assertNull(edgeInfo.getPropertyGroupByIndex(-1));
-        Assert.assertNull(edgeInfo.getPropertyGroupByIndex(2));
+        Assert.assertThrows(
+                IllegalArgumentException.class, () -> edgeInfo.getPropertyGroupByIndex(-1));
+        Assert.assertThrows(
+                IllegalArgumentException.class, () -> edgeInfo.getPropertyGroupByIndex(2));
         Assert.assertTrue(edgeInfo.removePropertyGroupAsNew(TestUtil.pg3).isEmpty());
 
-        Optional<EdgeInfo> withoutFirstGroup = edgeInfo.removePropertyGroupAsNew(TestUtil.pg1);
+        PropertyGroup equalFirstGroup =
+                new PropertyGroup(
+                        TestUtil.pg1.getPropertyList(),
+                        TestUtil.pg1.getFileType(),
+                        TestUtil.pg1.getBaseUri());
+        Optional<EdgeInfo> withoutFirstGroup = edgeInfo.removePropertyGroupAsNew(equalFirstGroup);
         Assert.assertTrue(withoutFirstGroup.isPresent());
         Assert.assertEquals(2, edgeInfo.getPropertyGroupNum());
         Assert.assertEquals(1, withoutFirstGroup.get().getPropertyGroupNum());

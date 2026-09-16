@@ -55,11 +55,14 @@ public class ColumnRefTest {
     }
 
     @Test
-    public void refusesToGuessAnUnknownColumn() {
-        Schema schema = new Schema(List.of(ID, NAME));
+    public void refusesToGuessAnUnknownOrAmbiguousColumn() {
+        Schema unique = new Schema(List.of(ID, NAME));
+        Schema duplicated = new Schema(List.of(ID, NAME, NAME));
 
-        assertThrows(IllegalArgumentException.class, () -> schema.resolve(ColumnRef.of("age")));
-        assertThrows(IllegalArgumentException.class, () -> schema.resolve(ColumnRef.of("ID")));
-        assertThrows(NullPointerException.class, () -> schema.resolve(null));
+        assertThrows(IllegalArgumentException.class, () -> unique.resolve(ColumnRef.of("age")));
+        assertThrows(IllegalArgumentException.class, () -> unique.resolve(ColumnRef.of("ID")));
+        assertEquals(0, duplicated.resolve(ColumnRef.of("id")));
+        assertThrows(
+                IllegalArgumentException.class, () -> duplicated.resolve(ColumnRef.of("name")));
     }
 }
