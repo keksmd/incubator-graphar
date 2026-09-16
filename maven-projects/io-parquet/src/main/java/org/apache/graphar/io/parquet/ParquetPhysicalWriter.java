@@ -52,6 +52,23 @@ public final class ParquetPhysicalWriter implements PhysicalWriter {
 
     private final Storage storage;
 
+    /**
+     * Maps the request mode onto a Parquet file mode. Parquet cannot append to a closed file
+     * without rewriting it, so {@link WriteMode#APPEND} is rejected instead of being downgraded to
+     * an overwrite.
+     */
+    static ParquetFileWriter.Mode fileMode(WriteMode mode) {
+        switch (Objects.requireNonNull(mode, "mode")) {
+            case CREATE_NEW:
+                return ParquetFileWriter.Mode.CREATE;
+            case OVERWRITE:
+                return ParquetFileWriter.Mode.OVERWRITE;
+            default:
+                throw new UnsupportedOperationException(
+                        "Parquet cannot append to an existing file; write mode " + mode);
+        }
+    }
+
     /** Creates a writer that resolves every output URI through {@code storage}. */
     public ParquetPhysicalWriter(Storage storage) {
         this.storage = Objects.requireNonNull(storage, "storage");
@@ -62,10 +79,7 @@ public final class ParquetPhysicalWriter implements PhysicalWriter {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(batches, "batches");
         MessageType parquetSchema = parquetSchema(request.schema());
-        ParquetFileWriter.Mode mode =
-                request.mode() == WriteMode.CREATE_NEW
-                        ? ParquetFileWriter.Mode.CREATE
-                        : ParquetFileWriter.Mode.OVERWRITE;
+        ParquetFileWriter.Mode mode = fileMode(request.mode());
         try (ParquetWriter<Group> writer =
                 ExampleParquetWriter.builder(
                                 new ParquetOutputFile(storage.outputFile(request.uri())))
