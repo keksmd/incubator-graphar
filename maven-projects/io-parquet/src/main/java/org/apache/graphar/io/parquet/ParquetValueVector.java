@@ -16,23 +16,40 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-
 package org.apache.graphar.io.parquet;
 
 import java.nio.ByteBuffer;
-import org.apache.graphar.io.Row;
+import org.apache.graphar.io.Field;
+import org.apache.graphar.io.ValueVector;
 
-/** An immutable neutral row with defensive binary views. */
-final class ParquetRow implements Row {
+/** One column of values materialized from a Parquet row group, with defensive binary views. */
+final class ParquetValueVector implements ValueVector {
+    private final Field field;
     private final Object[] values;
 
-    ParquetRow(Object[] values) {
-        this.values = values.clone();
+    ParquetValueVector(Field field, Object[] values) {
+        this.field = field;
+        this.values = values;
     }
 
     @Override
-    public Object value(int columnIndex) {
-        Object value = values[columnIndex];
+    public Field field() {
+        return field;
+    }
+
+    @Override
+    public int valueCount() {
+        return values.length;
+    }
+
+    @Override
+    public boolean isNull(int index) {
+        return values[index] == null;
+    }
+
+    @Override
+    public Object getObject(int index) {
+        Object value = values[index];
         if (value instanceof byte[]) {
             return ByteBuffer.wrap((byte[]) value).asReadOnlyBuffer();
         }

@@ -36,9 +36,9 @@ import org.apache.graphar.io.Projection;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.ReadResult;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
 import org.apache.graphar.io.RowRange;
 import org.apache.graphar.io.Schema;
+import org.apache.graphar.io.ValueVector;
 import org.apache.graphar.io.WriteMode;
 import org.apache.graphar.io.WriteRequest;
 import org.apache.graphar.storage.InputFile;
@@ -186,7 +186,7 @@ public class ParquetPhysicalIoEfficiencyTest {
             while (cursor.next()) {
                 RecordBatch batch = cursor.batch();
                 for (int index = 0; index < batch.rowCount(); index++) {
-                    assertEquals(mix(RANGE_START + rows), batch.row(index).value(0));
+                    assertEquals(mix(RANGE_START + rows), batch.column(0).getObject(index));
                     rows++;
                 }
             }
@@ -257,12 +257,38 @@ public class ParquetPhysicalIoEfficiencyTest {
         }
 
         @Override
-        public Row row(int index) {
-            if (index < 0 || index >= rowCount) {
-                throw new IndexOutOfBoundsException("Row index: " + index);
-            }
-            long value = start + index;
-            return columnIndex -> columnIndex == 0 ? value : mix(value);
+        public int columnCount() {
+            return SCHEMA.fields().size();
+        }
+
+        @Override
+        public ValueVector column(int columnIndex) {
+            Field field = SCHEMA.fields().get(columnIndex);
+            return new ValueVector() {
+                @Override
+                public Field field() {
+                    return field;
+                }
+
+                @Override
+                public int valueCount() {
+                    return rowCount;
+                }
+
+                @Override
+                public boolean isNull(int index) {
+                    return false;
+                }
+
+                @Override
+                public Object getObject(int index) {
+                    if (index < 0 || index >= rowCount) {
+                        throw new IndexOutOfBoundsException("Row index: " + index);
+                    }
+                    long value = start + index;
+                    return columnIndex == 0 ? value : mix(value);
+                }
+            };
         }
     }
 

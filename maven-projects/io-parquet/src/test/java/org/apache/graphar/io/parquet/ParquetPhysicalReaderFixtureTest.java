@@ -111,7 +111,7 @@ public class ParquetPhysicalReaderFixtureTest {
                 assertEquals(1, batch.schema().fields().size());
                 assertEquals("firstName", batch.schema().fields().get(0).name());
                 for (int index = 0; index < batch.rowCount(); index++) {
-                    firstNames.add((String) batch.row(index).value(0));
+                    firstNames.add((String) batch.column(0).getObject(index));
                 }
             }
             assertFalse(cursor.next());

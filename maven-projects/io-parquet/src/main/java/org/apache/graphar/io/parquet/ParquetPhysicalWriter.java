@@ -30,7 +30,6 @@ import org.apache.graphar.io.ColumnType;
 import org.apache.graphar.io.Field;
 import org.apache.graphar.io.PhysicalWriter;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
 import org.apache.graphar.io.Schema;
 import org.apache.graphar.io.WriteMode;
 import org.apache.graphar.io.WriteRequest;
@@ -80,7 +79,7 @@ public final class ParquetPhysicalWriter implements PhysicalWriter {
                         Objects.requireNonNull(batches.batch(), "batch cursor returned null");
                 requireSchema(request.schema(), batch.schema());
                 for (int rowIndex = 0; rowIndex < batch.rowCount(); rowIndex++) {
-                    writer.write(toGroup(groups, request.schema(), batch.row(rowIndex)));
+                    writer.write(toGroup(groups, request.schema(), batch, rowIndex));
                 }
             }
         } finally {
@@ -187,11 +186,12 @@ public final class ParquetPhysicalWriter implements PhysicalWriter {
         }
     }
 
-    private static Group toGroup(SimpleGroupFactory groups, Schema schema, Row row) {
+    private static Group toGroup(
+            SimpleGroupFactory groups, Schema schema, RecordBatch batch, int rowIndex) {
         Group group = groups.newGroup();
         for (int index = 0; index < schema.fields().size(); index++) {
             Field field = schema.fields().get(index);
-            Object value = row.value(index);
+            Object value = batch.column(index).getObject(rowIndex);
             if (value == null) {
                 if (!field.nullable()) {
                     throw new IllegalArgumentException("Required field is null: " + field.name());

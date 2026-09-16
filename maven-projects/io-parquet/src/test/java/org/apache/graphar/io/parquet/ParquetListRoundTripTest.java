@@ -25,12 +25,13 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import org.apache.graphar.io.BatchCursor;
 import org.apache.graphar.io.ColumnType;
 import org.apache.graphar.io.Field;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
+import org.apache.graphar.io.RecordBatches;
 import org.apache.graphar.io.Schema;
 import org.apache.graphar.io.WriteMode;
 import org.apache.graphar.io.WriteRequest;
@@ -61,11 +62,12 @@ public class ParquetListRoundTripTest {
                     .write(
                             new WriteRequest(uri, SCHEMA, WriteMode.CREATE_NEW),
                             new OneBatch(
-                                    SCHEMA,
-                                    List.of(
-                                            new Values(1L, List.of("one", "two")),
-                                            new Values(2L, List.of()),
-                                            new Values(3L, null))));
+                                    RecordBatches.ofRows(
+                                            SCHEMA,
+                                            List.of(
+                                                    Arrays.asList(1L, List.of("one", "two")),
+                                                    Arrays.asList(2L, List.of()),
+                                                    Arrays.asList(3L, null)))));
             List<Object> lists = new ArrayList<>();
             try (BatchCursor cursor =
                     new ParquetPhysicalReader(storage)
@@ -74,7 +76,7 @@ public class ParquetListRoundTripTest {
                 while (cursor.next()) {
                     RecordBatch batch = cursor.batch();
                     for (int index = 0; index < batch.rowCount(); index++) {
-                        lists.add(batch.row(index).value(1));
+                        lists.add(batch.column(1).getObject(index));
                     }
                 }
             }
@@ -86,41 +88,12 @@ public class ParquetListRoundTripTest {
         }
     }
 
-    private static final class Values implements Row {
-        private final Object[] values;
-
-        private Values(Object... values) {
-            this.values = values;
-        }
-
-        @Override
-        public Object value(int columnIndex) {
-            return values[columnIndex];
-        }
-    }
-
     private static final class OneBatch implements BatchCursor {
         private final RecordBatch batch;
         private boolean advanced;
 
-        private OneBatch(Schema schema, List<? extends Row> rows) {
-            this.batch =
-                    new RecordBatch() {
-                        @Override
-                        public Schema schema() {
-                            return schema;
-                        }
-
-                        @Override
-                        public int rowCount() {
-                            return rows.size();
-                        }
-
-                        @Override
-                        public Row row(int index) {
-                            return rows.get(index);
-                        }
-                    };
+        private OneBatch(RecordBatch batch) {
+            this.batch = batch;
         }
 
         @Override

@@ -39,6 +39,7 @@ import org.apache.graphar.io.ReadCapability;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.ReadResult;
 import org.apache.graphar.io.RecordBatch;
+import org.apache.graphar.io.RecordBatches;
 import org.apache.graphar.io.RowRange;
 import org.apache.graphar.io.Schema;
 import org.apache.graphar.io.WriteMode;
@@ -117,11 +118,11 @@ public class ParquetPhysicalWriterOffsetIndexTest {
     }
 
     private static BatchCursor topologyBatches() {
-        List<ParquetRow> rows = new ArrayList<>();
+        List<Object[]> rows = new ArrayList<>();
         for (long index = 0; index < 4096; index++) {
-            rows.add(new ParquetRow(new Object[] {index / 64, 10000L + index}));
+            rows.add(new Object[] {index / 64, 10000L + index});
         }
-        return new ListBatchCursor(List.of(new ParquetRecordBatch(TOPOLOGY_SCHEMA, rows)));
+        return new ListBatchCursor(List.of(RecordBatches.ofArrays(TOPOLOGY_SCHEMA, rows)));
     }
 
     private static List<Long> destinations(ReadResult result) throws IOException {
@@ -130,7 +131,7 @@ public class ParquetPhysicalWriterOffsetIndexTest {
             while (cursor.next()) {
                 RecordBatch batch = cursor.batch();
                 for (int index = 0; index < batch.rowCount(); index++) {
-                    destinations.add((Long) batch.row(index).value(0));
+                    destinations.add((Long) batch.column(0).getObject(index));
                 }
             }
         }

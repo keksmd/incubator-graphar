@@ -32,6 +32,8 @@ import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.RecordBatch;
 import org.apache.graphar.io.RowRange;
 import org.apache.graphar.io.Schema;
+import org.apache.graphar.io.ValueVector;
+import org.apache.graphar.io.VectorRecordBatch;
 import org.apache.parquet.column.page.PageReadStore;
 import org.apache.parquet.example.data.Group;
 import org.apache.parquet.example.data.simple.convert.GroupRecordConverter;
@@ -107,17 +109,17 @@ final class ParquetBatchCursor implements BatchCursor {
                 }
                 int batchSize =
                         (int) Math.min(Math.min(rowsRemainingInGroup, BATCH_ROWS), limit - emitted);
-                List<ParquetRow> matched = new ArrayList<>(batchSize);
+                Object[][] columns = new Object[outputIndexes.length][batchSize];
                 for (int index = 0; index < batchSize; index++) {
                     Group group = rows.read();
-                    matched.add(new ParquetRow(project(values(group))));
+                    project(values(group), columns, index);
                     emitted++;
                     rowsRemainingInGroup--;
                 }
                 if (rowsRemainingInGroup == 0) {
                     closePages();
                 }
-                current = new ParquetRecordBatch(outputSchema, matched);
+                current = batch(columns, batchSize);
                 if (emitted == limit) exhausted = true;
                 return true;
             }
@@ -233,13 +235,19 @@ final class ParquetBatchCursor implements BatchCursor {
         }
     }
 
-    private Object[] project(Object[] values) {
-        Object[] output = new Object[outputIndexes.length];
+    private void project(Object[] values, Object[][] columns, int row) {
         for (int index = 0; index < outputIndexes.length; index++) {
             Object value = values[outputIndexes[index]];
-            output[index] = value instanceof byte[] ? ((byte[]) value).clone() : value;
+            columns[index][row] = value instanceof byte[] ? ((byte[]) value).clone() : value;
         }
-        return output;
+    }
+
+    private RecordBatch batch(Object[][] columns, int rowCount) {
+        List<ValueVector> vectors = new ArrayList<>(columns.length);
+        for (int index = 0; index < columns.length; index++) {
+            vectors.add(new ParquetValueVector(outputSchema.fields().get(index), columns[index]));
+        }
+        return new VectorRecordBatch(outputSchema, vectors, rowCount);
     }
 
     private void finish() throws IOException {
