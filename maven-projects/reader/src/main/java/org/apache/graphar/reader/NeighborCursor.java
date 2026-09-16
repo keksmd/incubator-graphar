@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Objects;
 import org.apache.graphar.core.ResolvedAdjacency;
 import org.apache.graphar.io.BatchCursor;
+import org.apache.graphar.io.ColumnRef;
 import org.apache.graphar.io.PhysicalReader;
 import org.apache.graphar.io.Projection;
 import org.apache.graphar.io.ReadReport;
@@ -162,7 +163,7 @@ public final class NeighborCursor implements AutoCloseable {
                                     DatasetUris.resolve(
                                             datasetRoot,
                                             resolved.adjacencyChunkUri(edgeChunkIndex)))
-                            .projection(Projection.of(List.of(DESTINATION_COLUMN)))
+                            .projection(Projection.of(ColumnRef.of(DESTINATION_COLUMN)))
                             .rowRange(new RowRange(rangeStart - chunkStart, rangeEnd - chunkStart));
             if (limited) {
                 request.limit(remaining);

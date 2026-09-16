@@ -29,6 +29,7 @@ import java.util.Objects;
 import org.apache.graphar.info.EdgeInfo;
 import org.apache.graphar.info.GraphInfo;
 import org.apache.graphar.io.BatchCursor;
+import org.apache.graphar.io.ColumnRef;
 import org.apache.graphar.io.Projection;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.ReadResult;
@@ -217,7 +218,10 @@ public final class IcebergTopologyExporter {
         ReadResult result =
                 parquet.read(
                         ReadRequest.builder(uri)
-                                .projection(Projection.of(List.of(sourceColumn, destinationColumn)))
+                                .projection(
+                                        Projection.of(
+                                                ColumnRef.of(sourceColumn),
+                                                ColumnRef.of(destinationColumn)))
                                 .build());
         try (BatchCursor cursor = result.cursor()) {
             while (cursor.next()) {

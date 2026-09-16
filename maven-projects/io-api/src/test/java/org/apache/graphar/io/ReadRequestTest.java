@@ -21,6 +21,7 @@ package org.apache.graphar.io;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
@@ -33,14 +34,13 @@ import org.junit.Test;
 public class ReadRequestTest {
     @Test
     public void snapshotsAllReadHints() {
-        List<String> columns = new ArrayList<>(List.of("dst", "weight"));
+        List<ColumnRef> columns =
+                new ArrayList<>(List.of(ColumnRef.of("dst"), ColumnRef.of("weight")));
         List<Filter> filters =
                 new ArrayList<>(
                         List.of(
-                                Filter.comparison(
-                                        "weight",
-                                        ComparisonOperator.GREATER_THAN_OR_EQUAL,
-                                        Literal.of(1.5D))));
+                                Filter.greaterThanOrEqual(
+                                        ColumnRef.of("weight"), Literal.of(1.5D))));
 
         ReadRequest request =
                 ReadRequest.builder(URI.create("file:/dataset/part0"))
@@ -53,7 +53,9 @@ public class ReadRequestTest {
         columns.clear();
         filters.clear();
 
-        assertEquals(List.of("dst", "weight"), request.projection().columns());
+        assertEquals(
+                List.of(ColumnRef.of("dst"), ColumnRef.of("weight")),
+                request.projection().columns());
         assertEquals(1, request.filters().size());
         assertEquals(new RowRange(4, 9), request.rowRange().get());
         assertTrue(request.limit().isPresent());
@@ -61,7 +63,7 @@ public class ReadRequestTest {
         assertEquals(EnumSet.allOf(ReadCapability.class), request.requestedCapabilities());
         assertThrows(
                 UnsupportedOperationException.class,
-                () -> request.filters().add(Filter.isNotNull("weight")));
+                () -> request.filters().add(Filter.isNotNull(ColumnRef.of("weight"))));
     }
 
     @Test
@@ -81,11 +83,30 @@ public class ReadRequestTest {
         assertThrows(
                 IllegalArgumentException.class,
                 () -> ReadRequest.builder(URI.create("file:/input")).limit(-1));
-        assertThrows(IllegalArgumentException.class, () -> Projection.of(List.of("id", "id")));
         assertThrows(
                 IllegalArgumentException.class,
-                () -> Filter.comparison("id", ComparisonOperator.IS_NULL, Literal.of(1)));
+                () -> Projection.of(ColumnRef.of("id"), ColumnRef.of("id")));
         assertThrows(
                 IllegalArgumentException.class, () -> Literal.of(new StringBuilder("mutable")));
+    }
+
+    @Test
+    public void comparesByEveryHint() {
+        ReadRequest request = request().build();
+
+        assertEquals(request, request().build());
+        assertEquals(request.hashCode(), request().build().hashCode());
+        assertNotEquals(request, request().limit(2).build());
+        assertNotEquals(request, request().rowRange(new RowRange(0, 1)).build());
+        assertNotEquals(request, request().filters(List.of()).build());
+        assertNotEquals(request, request().projection(Projection.all()).build());
+        assertNotEquals(request, ReadRequest.builder(URI.create("file:/other")).build());
+    }
+
+    private static ReadRequest.Builder request() {
+        return ReadRequest.builder(URI.create("file:/input"))
+                .projection(Projection.of(ColumnRef.of("id")))
+                .filters(List.of(Filter.isNotNull(ColumnRef.of("id"))))
+                .limit(1);
     }
 }

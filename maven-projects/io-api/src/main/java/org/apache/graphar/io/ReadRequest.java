@@ -96,6 +96,27 @@ public final class ReadRequest {
         return Collections.unmodifiableSet(capabilities);
     }
 
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof ReadRequest)) {
+            return false;
+        }
+        ReadRequest that = (ReadRequest) other;
+        return uri.equals(that.uri)
+                && projection.equals(that.projection)
+                && Objects.equals(rowRange, that.rowRange)
+                && filters.equals(that.filters)
+                && Objects.equals(limit, that.limit);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(uri, projection, rowRange, filters, limit);
+    }
+
     /** Builder for immutable {@link ReadRequest} values. */
     public static final class Builder {
         private final URI uri;

@@ -29,6 +29,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import org.apache.graphar.io.BatchCursor;
+import org.apache.graphar.io.ColumnRef;
 import org.apache.graphar.io.ColumnType;
 import org.apache.graphar.io.Field;
 import org.apache.graphar.io.Projection;
@@ -80,7 +81,7 @@ public class ParquetPhysicalIoEfficiencyTest {
                     new ParquetPhysicalReader(storage)
                             .read(
                                     ReadRequest.builder(uri)
-                                            .projection(Projection.of(List.of("payload")))
+                                            .projection(Projection.of(ColumnRef.of("payload")))
                                             .rowRange(
                                                     new RowRange(
                                                             RANGE_START, RANGE_START + RANGE_ROWS))
@@ -174,7 +175,7 @@ public class ParquetPhysicalIoEfficiencyTest {
         return assertPayloads(
                 reader.read(
                         ReadRequest.builder(uri)
-                                .projection(Projection.of(List.of("payload")))
+                                .projection(Projection.of(ColumnRef.of("payload")))
                                 .rowRange(new RowRange(RANGE_START, RANGE_START + RANGE_ROWS))
                                 .build()));
     }

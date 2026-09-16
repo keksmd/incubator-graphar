@@ -29,10 +29,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 import org.apache.graphar.info.Property;
 import org.apache.graphar.info.PropertyGroup;
 import org.apache.graphar.info.VertexInfo;
 import org.apache.graphar.io.BatchCursor;
+import org.apache.graphar.io.ColumnRef;
 import org.apache.graphar.io.PhysicalReader;
 import org.apache.graphar.io.Projection;
 import org.apache.graphar.io.ReadReport;
@@ -211,7 +213,11 @@ public final class VertexPropertyCursor implements AutoCloseable {
         ReadResult result =
                 physicalReader.read(
                         ReadRequest.builder(uri)
-                                .projection(Projection.of(projection))
+                                .projection(
+                                        Projection.of(
+                                                projection.stream()
+                                                        .map(ColumnRef::of)
+                                                        .collect(Collectors.toList())))
                                 .rowRange(range)
                                 .build());
         reports.add(result.report());

@@ -48,4 +48,19 @@ public final class Schema {
     public List<Field> fields() {
         return fields;
     }
+
+    /**
+     * Resolves {@code column} to its zero-based physical index by exact name.
+     *
+     * @throws IllegalArgumentException when no field carries that name
+     */
+    public int resolve(ColumnRef column) {
+        Objects.requireNonNull(column, "A column reference cannot be null.");
+        for (int index = 0; index < fields.size(); index++) {
+            if (fields.get(index).name().equals(column.name())) {
+                return index;
+            }
+        }
+        throw new IllegalArgumentException("Column " + column + " is not in the schema.");
+    }
 }

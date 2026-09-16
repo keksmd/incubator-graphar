@@ -29,6 +29,7 @@ import org.apache.graphar.core.ChunkMath;
 import org.apache.graphar.info.EdgeInfo;
 import org.apache.graphar.info.type.AdjListType;
 import org.apache.graphar.io.BatchCursor;
+import org.apache.graphar.io.ColumnRef;
 import org.apache.graphar.io.PhysicalReader;
 import org.apache.graphar.io.Projection;
 import org.apache.graphar.io.ReadRequest;
@@ -247,7 +248,7 @@ public final class EdgeLayoutReader {
                                         DatasetUris.resolve(
                                                 datasetRoot,
                                                 edgeInfo.getOffsetChunkUri(layout, partition)))
-                                .projection(Projection.of(List.of(OFFSET_COLUMN)))
+                                .projection(Projection.of(ColumnRef.of(OFFSET_COLUMN)))
                                 .rowRange(new RowRange(localVertex, localVertex + 2))
                                 .build());
         List<Long> values = new ArrayList<>(2);

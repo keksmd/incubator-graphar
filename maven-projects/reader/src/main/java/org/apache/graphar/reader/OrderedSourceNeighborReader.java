@@ -38,6 +38,7 @@ import org.apache.graphar.core.ResolvedAdjacency;
 import org.apache.graphar.info.EdgeInfo;
 import org.apache.graphar.info.type.AdjListType;
 import org.apache.graphar.io.BatchCursor;
+import org.apache.graphar.io.ColumnRef;
 import org.apache.graphar.io.PhysicalReader;
 import org.apache.graphar.io.Projection;
 import org.apache.graphar.io.ReadRequest;
@@ -176,7 +177,7 @@ public final class OrderedSourceNeighborReader {
             }
             ReadRequest request =
                     ReadRequest.builder(offsetUri)
-                            .projection(Projection.of(List.of(OFFSET_COLUMN)))
+                            .projection(Projection.of(ColumnRef.of(OFFSET_COLUMN)))
                             .build();
             ReadResult result = physicalReader.read(request);
             OffsetChunk loaded = OffsetChunk.of(readOffsets(result.cursor()));
@@ -190,7 +191,8 @@ public final class OrderedSourceNeighborReader {
                 physicalReader.read(
                         ReadRequest.builder(selection.uri)
                                 .projection(
-                                        Projection.of(List.of(NeighborCursor.DESTINATION_COLUMN)))
+                                        Projection.of(
+                                                ColumnRef.of(NeighborCursor.DESTINATION_COLUMN)))
                                 .rowRange(
                                         new org.apache.graphar.io.RowRange(
                                                 selection.start, selection.end))

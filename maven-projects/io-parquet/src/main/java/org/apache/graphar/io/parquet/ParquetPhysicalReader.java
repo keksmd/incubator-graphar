@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import org.apache.graphar.io.ColumnRef;
 import org.apache.graphar.io.ColumnType;
 import org.apache.graphar.io.Field;
 import org.apache.graphar.io.PhysicalReader;
@@ -198,10 +199,10 @@ public final class ParquetPhysicalReader implements PhysicalReader {
             return fileColumns;
         }
         List<ParquetColumn> result = new ArrayList<>();
-        for (String name : request.projection().columns()) {
-            ParquetColumn column = columnsByName.get(name);
+        for (ColumnRef reference : request.projection().columns()) {
+            ParquetColumn column = columnsByName.get(reference.name());
             if (column == null) {
-                throw new IllegalArgumentException("Unknown projection column: " + name);
+                throw new IllegalArgumentException("Unknown projection column: " + reference);
             }
             result.add(column);
         }

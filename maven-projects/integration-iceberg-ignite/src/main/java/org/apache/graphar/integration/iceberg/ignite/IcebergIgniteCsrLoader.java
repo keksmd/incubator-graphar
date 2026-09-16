@@ -21,11 +21,11 @@ package org.apache.graphar.integration.iceberg.ignite;
 
 import java.io.IOException;
 import java.net.URI;
-import java.util.List;
 import java.util.Objects;
 import org.apache.graphar.integration.iceberg.IcebergFileIOStorage;
 import org.apache.graphar.integration.ignite.IgniteCsrStore;
 import org.apache.graphar.io.BatchCursor;
+import org.apache.graphar.io.ColumnRef;
 import org.apache.graphar.io.Projection;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.ReadResult;
@@ -218,7 +218,9 @@ public final class IcebergIgniteCsrLoader {
                     parquet.read(
                             ReadRequest.builder(URI.create(task.file().path().toString()))
                                     .projection(
-                                            Projection.of(List.of(sourceColumn, destinationColumn)))
+                                            Projection.of(
+                                                    ColumnRef.of(sourceColumn),
+                                                    ColumnRef.of(destinationColumn)))
                                     .build());
             batches = result.cursor();
         }

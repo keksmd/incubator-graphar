@@ -91,26 +91,18 @@ public class PhysicalReaderContractTest {
 
     private static ReadRequest requestWithEveryHint() {
         return ReadRequest.builder(URI.create("file:/input"))
-                .projection(Projection.of(java.util.List.of("id")))
+                .projection(Projection.of(ColumnRef.of("id")))
                 .rowRange(new RowRange(10, 20))
-                .filters(
-                        java.util.List.of(
-                                Filter.comparison(
-                                        "id", ComparisonOperator.GREATER_THAN, Literal.of(7))))
+                .filters(List.of(Filter.greaterThan(ColumnRef.of("id"), Literal.of(7))))
                 .limit(4)
                 .build();
     }
 
     private static ReadRequest requestForRows() {
         return ReadRequest.builder(URI.create("memory:/input"))
-                .projection(Projection.of(List.of("id", "name")))
+                .projection(Projection.of(ColumnRef.of("id"), ColumnRef.of("name")))
                 .rowRange(new RowRange(1, 5))
-                .filters(
-                        List.of(
-                                Filter.comparison(
-                                        "age",
-                                        ComparisonOperator.GREATER_THAN_OR_EQUAL,
-                                        Literal.of(18))))
+                .filters(List.of(Filter.greaterThanOrEqual(ColumnRef.of("age"), Literal.of(18))))
                 .limit(1)
                 .build();
     }

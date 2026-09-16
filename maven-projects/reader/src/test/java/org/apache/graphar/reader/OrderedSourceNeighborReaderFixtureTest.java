@@ -31,6 +31,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.apache.graphar.info.EdgeInfo;
 import org.apache.graphar.info.loader.impl.LocalFileSystemStringGraphInfoLoader;
+import org.apache.graphar.io.ColumnRef;
 import org.apache.graphar.io.PhysicalReader;
 import org.apache.graphar.io.ReadCapability;
 import org.apache.graphar.io.ReadRequest;
@@ -144,7 +145,7 @@ public class OrderedSourceNeighborReaderFixtureTest {
             RowRange expectedRange,
             Long limit) {
         assertEquals(fixtureRoot().resolve(expectedUri), request.uri());
-        assertEquals(List.of(expectedColumn), request.projection().columns());
+        assertEquals(List.of(ColumnRef.of(expectedColumn)), request.projection().columns());
         if (expectedRange == null) {
             assertFalse(request.rowRange().isPresent());
         } else {

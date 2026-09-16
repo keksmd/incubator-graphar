@@ -16,10 +16,10 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-
 package org.apache.graphar.io;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
@@ -30,9 +30,9 @@ public final class Projection {
     private static final Projection ALL_COLUMNS = new Projection(true, List.of());
 
     private final boolean allColumns;
-    private final List<String> columns;
+    private final List<ColumnRef> columns;
 
-    private Projection(boolean allColumns, List<String> columns) {
+    private Projection(boolean allColumns, List<ColumnRef> columns) {
         this.allColumns = allColumns;
         this.columns = columns;
     }
@@ -43,17 +43,23 @@ public final class Projection {
     }
 
     /** Requests the supplied columns in order. */
-    public static Projection of(List<String> columns) {
+    public static Projection of(ColumnRef... columns) {
+        if (columns == null) {
+            throw new IllegalArgumentException("A projection must contain at least one column.");
+        }
+        return of(Arrays.asList(columns));
+    }
+
+    /** Requests the supplied columns in order. */
+    public static Projection of(List<ColumnRef> columns) {
         if (columns == null || columns.isEmpty()) {
             throw new IllegalArgumentException("A projection must contain at least one column.");
         }
-        List<String> copy = new ArrayList<>(columns.size());
-        Set<String> names = new HashSet<>();
-        for (String column : columns) {
-            if (column == null || column.isBlank()) {
-                throw new IllegalArgumentException("Projection column names cannot be blank.");
-            }
-            if (!names.add(column)) {
+        List<ColumnRef> copy = new ArrayList<>(columns.size());
+        Set<ColumnRef> seen = new HashSet<>();
+        for (ColumnRef column : columns) {
+            Objects.requireNonNull(column, "A projection column cannot be null.");
+            if (!seen.add(column)) {
                 throw new IllegalArgumentException(
                         "Projection contains duplicate column: " + column);
             }
@@ -68,7 +74,7 @@ public final class Projection {
     }
 
     /** Returns the requested columns, or an empty list when all columns are requested. */
-    public List<String> columns() {
+    public List<ColumnRef> columns() {
         return columns;
     }
 

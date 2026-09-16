@@ -27,7 +27,9 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import org.apache.graphar.info.loader.impl.LocalFileSystemStringGraphInfoLoader;
+import org.apache.graphar.io.ColumnRef;
 import org.apache.graphar.io.PhysicalReader;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.ReadResult;
@@ -200,7 +202,9 @@ public class VertexReaderFixtureTest {
             List<String> expectedColumns,
             RowRange expectedRange) {
         assertEquals(fixturePath().toUri().resolve(expectedUri), request.uri());
-        assertEquals(expectedColumns, request.projection().columns());
+        assertEquals(
+                expectedColumns.stream().map(ColumnRef::of).collect(Collectors.toList()),
+                request.projection().columns());
         assertEquals(expectedRange, request.rowRange().orElseThrow());
     }
 

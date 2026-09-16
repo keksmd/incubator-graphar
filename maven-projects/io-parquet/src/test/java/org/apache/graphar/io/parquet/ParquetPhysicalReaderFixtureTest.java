@@ -29,7 +29,7 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import org.apache.graphar.io.BatchCursor;
-import org.apache.graphar.io.ComparisonOperator;
+import org.apache.graphar.io.ColumnRef;
 import org.apache.graphar.io.Projection;
 import org.apache.graphar.io.ReadCapability;
 import org.apache.graphar.io.ReadRequest;
@@ -55,7 +55,7 @@ public class ParquetPhysicalReaderFixtureTest {
                         "chunk0");
         ReadRequest request =
                 ReadRequest.builder(fixture.toUri())
-                        .projection(Projection.of(List.of("firstName")))
+                        .projection(Projection.of(ColumnRef.of("firstName")))
                         .rowRange(new RowRange(1, 12))
                         .build();
 
@@ -89,9 +89,8 @@ public class ParquetPhysicalReaderFixtureTest {
                 ReadRequest.builder(fixture.toUri())
                         .filters(
                                 List.of(
-                                        org.apache.graphar.io.Filter.comparison(
-                                                "gender",
-                                                ComparisonOperator.EQUAL,
+                                        org.apache.graphar.io.Filter.equal(
+                                                ColumnRef.of("gender"),
                                                 org.apache.graphar.io.Literal.of("male"))))
                         .build();
 

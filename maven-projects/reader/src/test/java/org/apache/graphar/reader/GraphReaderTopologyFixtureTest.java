@@ -28,6 +28,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.graphar.info.loader.impl.LocalFileSystemStringGraphInfoLoader;
+import org.apache.graphar.io.ColumnRef;
 import org.apache.graphar.io.PhysicalReader;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.ReadResult;
@@ -151,7 +152,8 @@ public class GraphReaderTopologyFixtureTest {
             ReadRequest request, String expectedUri, RowRange expectedRange, Long limit) {
         assertEquals(fixturePath().toUri().resolve(expectedUri), request.uri());
         assertEquals(
-                List.of("_graphArSrcIndex", "_graphArDstIndex"), request.projection().columns());
+                List.of(ColumnRef.of("_graphArSrcIndex"), ColumnRef.of("_graphArDstIndex")),
+                request.projection().columns());
         assertEquals(expectedRange, request.rowRange().orElseThrow());
         if (limit == null) {
             assertFalse(request.limit().isPresent());

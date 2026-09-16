@@ -20,6 +20,7 @@
 package org.apache.graphar.io;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertThrows;
 
 import java.util.EnumSet;
@@ -38,6 +39,24 @@ public class ReadReportTest {
         assertThrows(
                 UnsupportedOperationException.class,
                 () -> report.applied().add(ReadCapability.LIMIT));
+    }
+
+    @Test
+    public void comparesByAppliedAndDeclinedSets() {
+        ReadReport report =
+                new ReadReport(
+                        EnumSet.of(ReadCapability.PROJECTION), EnumSet.of(ReadCapability.FILTER));
+        ReadReport same =
+                new ReadReport(
+                        EnumSet.of(ReadCapability.PROJECTION), EnumSet.of(ReadCapability.FILTER));
+        ReadReport swapped =
+                new ReadReport(
+                        EnumSet.of(ReadCapability.FILTER), EnumSet.of(ReadCapability.PROJECTION));
+
+        assertEquals(report, same);
+        assertEquals(report.hashCode(), same.hashCode());
+        assertNotEquals(report, swapped);
+        assertEquals(Set.of(report), Set.of(same));
     }
 
     @Test

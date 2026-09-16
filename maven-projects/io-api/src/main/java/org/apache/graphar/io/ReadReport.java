@@ -52,6 +52,23 @@ public final class ReadReport {
         return declined;
     }
 
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof ReadReport)) {
+            return false;
+        }
+        ReadReport that = (ReadReport) other;
+        return applied.equals(that.applied) && declined.equals(that.declined);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(applied, declined);
+    }
+
     private static EnumSet<ReadCapability> copyOf(Set<ReadCapability> capabilities) {
         Objects.requireNonNull(capabilities, "Read capabilities cannot be null.");
         return capabilities.isEmpty()

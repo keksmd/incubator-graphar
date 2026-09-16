@@ -28,6 +28,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.graphar.info.loader.impl.LocalFileSystemStringGraphInfoLoader;
+import org.apache.graphar.io.ColumnRef;
 import org.apache.graphar.io.PhysicalReader;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.ReadResult;
@@ -90,7 +91,9 @@ public class VertexIdIndexFixtureTest {
             assertTrue(
                     "unexpected chunk " + request.uri(),
                     request.uri().toString().contains("/vertex/person/id/chunk"));
-            assertEquals(List.of("_graphArVertexIndex", "id"), request.projection().columns());
+            assertEquals(
+                    List.of(ColumnRef.of("_graphArVertexIndex"), ColumnRef.of("id")),
+                    request.projection().columns());
         }
     }
 

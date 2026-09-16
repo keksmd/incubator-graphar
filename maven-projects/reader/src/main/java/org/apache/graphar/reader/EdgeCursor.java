@@ -28,6 +28,7 @@ import org.apache.graphar.core.ChunkMath;
 import org.apache.graphar.info.EdgeInfo;
 import org.apache.graphar.info.type.AdjListType;
 import org.apache.graphar.io.BatchCursor;
+import org.apache.graphar.io.ColumnRef;
 import org.apache.graphar.io.PhysicalReader;
 import org.apache.graphar.io.Projection;
 import org.apache.graphar.io.ReadReport;
@@ -38,8 +39,8 @@ import org.apache.graphar.io.RowRange;
 
 /** A closeable sequential cursor over ordered-by-source GraphAr topology rows. */
 public final class EdgeCursor implements AutoCloseable {
-    private static final List<String> TOPOLOGY_COLUMNS =
-            List.of("_graphArSrcIndex", "_graphArDstIndex");
+    private static final List<ColumnRef> TOPOLOGY_COLUMNS =
+            List.of(ColumnRef.of("_graphArSrcIndex"), ColumnRef.of("_graphArDstIndex"));
 
     private final EdgeInfo edgeInfo;
     private final URI datasetRoot;

@@ -42,6 +42,7 @@ import org.apache.graphar.info.type.AdjListType;
 import org.apache.graphar.info.type.DataType;
 import org.apache.graphar.info.type.FileType;
 import org.apache.graphar.io.BatchCursor;
+import org.apache.graphar.io.ColumnRef;
 import org.apache.graphar.io.ColumnType;
 import org.apache.graphar.io.Field;
 import org.apache.graphar.io.PhysicalReader;
@@ -126,7 +127,9 @@ public class EdgePropertyCursorStreamingTest {
         assertEquals(new RowRange(1, 3), physicalReader.requests.get(0).rowRange().orElseThrow());
         assertEquals(new RowRange(10, 15), physicalReader.requests.get(1).rowRange().orElseThrow());
         assertEquals(new RowRange(10, 15), physicalReader.requests.get(2).rowRange().orElseThrow());
-        assertEquals(List.of("weight"), physicalReader.requests.get(2).projection().columns());
+        assertEquals(
+                List.of(ColumnRef.of("weight")),
+                physicalReader.requests.get(2).projection().columns());
         assertFalse(physicalReader.requestedUriContains("kind"));
     }
 
@@ -275,8 +278,8 @@ public class EdgePropertyCursorStreamingTest {
 
     private static RecordBatch batch(ReadRequest request, long start, long end) {
         List<Field> fields = new ArrayList<>();
-        for (String name : request.projection().columns()) {
-            fields.add(new Field(name, ColumnType.of(ColumnType.Kind.INT64), false));
+        for (ColumnRef column : request.projection().columns()) {
+            fields.add(new Field(column.name(), ColumnType.of(ColumnType.Kind.INT64), false));
         }
         Schema schema = new Schema(fields);
         return new RecordBatch() {
@@ -293,7 +296,7 @@ public class EdgePropertyCursorStreamingTest {
             @Override
             public Row row(int index) {
                 long absolute = start + index;
-                return column -> value(request.projection().columns().get(column), absolute);
+                return column -> value(request.projection().columns().get(column).name(), absolute);
             }
         };
     }

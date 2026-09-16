@@ -31,6 +31,7 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import org.apache.graphar.io.BatchCursor;
+import org.apache.graphar.io.ColumnRef;
 import org.apache.graphar.io.ColumnType;
 import org.apache.graphar.io.Field;
 import org.apache.graphar.io.Projection;
@@ -80,7 +81,8 @@ public class ParquetPhysicalWriterOffsetIndexTest {
                     new ParquetPhysicalReader(storage)
                             .read(
                                     ReadRequest.builder(uri)
-                                            .projection(Projection.of(List.of("_graphArDstIndex")))
+                                            .projection(
+                                                    Projection.of(ColumnRef.of("_graphArDstIndex")))
                                             .rowRange(new RowRange(2051, 2063))
                                             .build());
             assertEquals(
