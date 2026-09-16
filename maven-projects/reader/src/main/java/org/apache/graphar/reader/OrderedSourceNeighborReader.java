@@ -107,7 +107,9 @@ public final class OrderedSourceNeighborReader {
             result.put(source, List.of());
             OffsetLocation location = resolver.locate(source);
             LoadedOffsetChunk loaded =
-                    loadOffsetChunk(DatasetUris.resolve(datasetRoot, location.offsetChunkUri()));
+                    loadOffsetChunk(
+                            DatasetUris.resolve(datasetRoot, location.offsetChunkUri()),
+                            location.vertexChunkIndex());
             ResolvedAdjacency resolved = resolver.resolve(source, loaded.offsetChunk);
             for (long chunk = resolved.edgeChunks().begin();
                     chunk < resolved.edgeChunks().end();
@@ -151,7 +153,7 @@ public final class OrderedSourceNeighborReader {
             throws IOException {
         OffsetLocation location = resolver.locate(sourceVertexId);
         URI offsetUri = DatasetUris.resolve(datasetRoot, location.offsetChunkUri());
-        LoadedOffsetChunk loaded = loadOffsetChunk(offsetUri);
+        LoadedOffsetChunk loaded = loadOffsetChunk(offsetUri, location.vertexChunkIndex());
         EdgeRange offsets = loaded.offsetChunk.rangeFor(location.offsetIndex());
         ResolvedAdjacency resolved =
                 resolver.resolve(sourceVertexId, offsets.begin(), offsets.end());
@@ -165,7 +167,8 @@ public final class OrderedSourceNeighborReader {
                 loaded.report);
     }
 
-    private LoadedOffsetChunk loadOffsetChunk(URI offsetUri) throws IOException {
+    private LoadedOffsetChunk loadOffsetChunk(URI offsetUri, long vertexChunkIndex)
+            throws IOException {
         OffsetChunk cached = offsetChunks.get(offsetUri);
         if (cached != null) {
             return new LoadedOffsetChunk(cached, null);
@@ -180,7 +183,7 @@ public final class OrderedSourceNeighborReader {
                             .projection(Projection.of(ColumnRef.of(OFFSET_COLUMN)))
                             .build();
             ReadResult result = physicalReader.read(request);
-            OffsetChunk loaded = OffsetChunk.of(readOffsets(result.cursor()));
+            OffsetChunk loaded = OffsetChunk.of(vertexChunkIndex, readOffsets(result.cursor()));
             offsetChunks.put(offsetUri, loaded);
             return new LoadedOffsetChunk(loaded, result.report());
         }
@@ -202,7 +205,7 @@ public final class OrderedSourceNeighborReader {
             while (cursor.next()) {
                 RecordBatch batch = cursor.batch();
                 for (int index = 0; index < batch.rowCount(); index++) {
-                    Object value = batch.row(index).value(0);
+                    Object value = batch.column(0).getObject(index);
                     if (!(value instanceof Long) || (Long) value < 0) {
                         throw new IllegalArgumentException(
                                 "GraphAr destination IDs must be non-negative INT64 values.");
@@ -224,7 +227,7 @@ public final class OrderedSourceNeighborReader {
             while (closeableCursor.next()) {
                 RecordBatch batch = closeableCursor.batch();
                 for (int index = 0; index < batch.rowCount(); index++) {
-                    Object value = batch.row(index).value(0);
+                    Object value = batch.column(0).getObject(index);
                     if (!(value instanceof Long) || ((Long) value) < 0) {
                         throw new IllegalArgumentException(
                                 "GraphAr offsets must be non-negative INT64 values.");

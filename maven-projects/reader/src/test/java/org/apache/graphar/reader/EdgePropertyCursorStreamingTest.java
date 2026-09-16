@@ -45,15 +45,17 @@ import org.apache.graphar.io.BatchCursor;
 import org.apache.graphar.io.ColumnRef;
 import org.apache.graphar.io.ColumnType;
 import org.apache.graphar.io.Field;
+import org.apache.graphar.io.ObjectValueVector;
 import org.apache.graphar.io.PhysicalReader;
 import org.apache.graphar.io.ReadCapability;
 import org.apache.graphar.io.ReadReport;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.ReadResult;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
 import org.apache.graphar.io.RowRange;
 import org.apache.graphar.io.Schema;
+import org.apache.graphar.io.ValueVector;
+import org.apache.graphar.io.VectorRecordBatch;
 import org.apache.graphar.storage.local.LocalStorage;
 import org.junit.Rule;
 import org.junit.Test;
@@ -282,23 +284,16 @@ public class EdgePropertyCursorStreamingTest {
             fields.add(new Field(column.name(), ColumnType.of(ColumnType.Kind.INT64), false));
         }
         Schema schema = new Schema(fields);
-        return new RecordBatch() {
-            @Override
-            public Schema schema() {
-                return schema;
+        int rowCount = Math.toIntExact(end - start);
+        List<ValueVector> columns = new ArrayList<>();
+        for (Field field : fields) {
+            List<Object> values = new ArrayList<>(rowCount);
+            for (int index = 0; index < rowCount; index++) {
+                values.add(value(field.name(), start + index));
             }
-
-            @Override
-            public int rowCount() {
-                return Math.toIntExact(end - start);
-            }
-
-            @Override
-            public Row row(int index) {
-                long absolute = start + index;
-                return column -> value(request.projection().columns().get(column).name(), absolute);
-            }
-        };
+            columns.add(new ObjectValueVector(field, values));
+        }
+        return new VectorRecordBatch(schema, columns, rowCount);
     }
 
     private static Object value(String column, long row) {

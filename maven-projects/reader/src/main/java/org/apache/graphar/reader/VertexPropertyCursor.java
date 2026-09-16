@@ -41,7 +41,6 @@ import org.apache.graphar.io.ReadReport;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.ReadResult;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
 import org.apache.graphar.io.RowRange;
 
 /**
@@ -99,8 +98,8 @@ public final class VertexPropertyCursor implements AutoCloseable {
                 }
                 streams = openSegment(segments.get(segmentIndex++));
             }
-            Row leading = streams.groups.get(0).rows.next();
-            if (leading == null) {
+            RowStream leading = streams.groups.get(0).rows;
+            if (!leading.next()) {
                 SegmentStreams completed = streams;
                 streams = null;
                 finish(completed);
@@ -111,8 +110,8 @@ public final class VertexPropertyCursor implements AutoCloseable {
             copyProperties(streams.groups.get(0).projection, leading, properties);
             for (int index = 1; index < streams.groups.size(); index++) {
                 PropertyStream stream = streams.groups.get(index);
-                Row row = stream.rows.next();
-                if (row == null) {
+                RowStream row = stream.rows;
+                if (!row.next()) {
                     throw new IllegalArgumentException(
                             "Vertex property chunk row count does not match its leading chunk.");
                 }
@@ -158,7 +157,7 @@ public final class VertexPropertyCursor implements AutoCloseable {
     }
 
     private static void copyProperties(
-            PropertyProjection projection, Row row, Map<String, Object> target) {
+            PropertyProjection projection, RowStream row, Map<String, Object> target) {
         for (int column = 0; column < projection.names.size(); column++) {
             target.put(projection.names.get(column), row.value(column + 1));
         }
@@ -341,7 +340,7 @@ public final class VertexPropertyCursor implements AutoCloseable {
 
         private void verifyExhausted() throws IOException {
             for (int index = 1; index < groups.size(); index++) {
-                if (groups.get(index).rows.next() != null) {
+                if (groups.get(index).rows.next()) {
                     throw new IllegalArgumentException(
                             "Vertex property chunk row count does not match its leading chunk.");
                 }
@@ -378,20 +377,25 @@ public final class VertexPropertyCursor implements AutoCloseable {
             this.cursor = Objects.requireNonNull(cursor, "Batch cursor cannot be null.");
         }
 
-        private Row next() throws IOException {
+        private boolean next() throws IOException {
             while (!exhausted) {
-                if (batch != null && row < batch.rowCount()) {
-                    return batch.row(row++);
+                if (batch != null && row + 1 < batch.rowCount()) {
+                    row++;
+                    return true;
                 }
                 if (!cursor.next()) {
                     exhausted = true;
                     batch = null;
-                    return null;
+                    return false;
                 }
                 batch = Objects.requireNonNull(cursor.batch(), "batch cursor returned null");
-                row = 0;
+                row = -1;
             }
-            return null;
+            return false;
+        }
+
+        private Object value(int column) {
+            return batch.column(column).getObject(row);
         }
 
         @Override

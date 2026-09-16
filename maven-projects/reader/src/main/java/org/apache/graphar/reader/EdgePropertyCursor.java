@@ -42,7 +42,6 @@ import org.apache.graphar.io.ReadReport;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.ReadResult;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
 import org.apache.graphar.io.RowRange;
 
 /**
@@ -107,8 +106,8 @@ public final class EdgePropertyCursor implements AutoCloseable {
                 }
                 streams = openSegment(segments.get(segmentIndex++));
             }
-            Row topology = streams.topology.next();
-            if (topology == null) {
+            RowStream topology = streams.topology;
+            if (!topology.next()) {
                 SegmentStreams completed = streams;
                 streams = null;
                 finish(completed);
@@ -116,8 +115,8 @@ public final class EdgePropertyCursor implements AutoCloseable {
             }
             Map<String, Object> properties = new LinkedHashMap<>();
             for (int index = 0; index < streams.properties.size(); index++) {
-                Row propertyRow = streams.properties.get(index).rows.next();
-                if (propertyRow == null) {
+                RowStream propertyRow = streams.properties.get(index).rows;
+                if (!propertyRow.next()) {
                     throw new IllegalArgumentException(
                             "Edge property chunk row count does not match its topology chunk.");
                 }
@@ -354,7 +353,7 @@ public final class EdgePropertyCursor implements AutoCloseable {
 
         private void verifyExhausted() throws IOException {
             for (PropertyStream property : properties) {
-                if (property.rows.next() != null) {
+                if (property.rows.next()) {
                     throw new IllegalArgumentException(
                             "Edge property chunk row count does not match its topology chunk.");
                 }
@@ -396,20 +395,25 @@ public final class EdgePropertyCursor implements AutoCloseable {
             this.cursor = Objects.requireNonNull(cursor, "Batch cursor cannot be null.");
         }
 
-        private Row next() throws IOException {
+        private boolean next() throws IOException {
             while (!exhausted) {
-                if (batch != null && row < batch.rowCount()) {
-                    return batch.row(row++);
+                if (batch != null && row + 1 < batch.rowCount()) {
+                    row++;
+                    return true;
                 }
                 if (!cursor.next()) {
                     exhausted = true;
                     batch = null;
-                    return null;
+                    return false;
                 }
                 batch = Objects.requireNonNull(cursor.batch(), "Batch cursor returned null batch.");
-                row = 0;
+                row = -1;
             }
-            return null;
+            return false;
+        }
+
+        private Object value(int column) {
+            return batch.column(column).getObject(row);
         }
 
         @Override
