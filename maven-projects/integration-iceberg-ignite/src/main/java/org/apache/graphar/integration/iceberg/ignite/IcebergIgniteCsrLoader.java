@@ -30,7 +30,6 @@ import org.apache.graphar.io.Projection;
 import org.apache.graphar.io.ReadRequest;
 import org.apache.graphar.io.ReadResult;
 import org.apache.graphar.io.RecordBatch;
-import org.apache.graphar.io.Row;
 import org.apache.graphar.io.parquet.ParquetPhysicalReader;
 import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.FileScanTask;
@@ -162,9 +161,10 @@ public final class IcebergIgniteCsrLoader {
             destination = null;
             while (true) {
                 if (batch != null && rowIndex < batch.rowCount()) {
-                    Row row = batch.row(rowIndex++);
-                    source = requiredLong(row.value(0), sourceColumn);
-                    destination = requiredLong(row.value(1), destinationColumn);
+                    source = requiredLong(batch.column(0).getObject(rowIndex), sourceColumn);
+                    destination =
+                            requiredLong(batch.column(1).getObject(rowIndex), destinationColumn);
+                    rowIndex++;
                     return true;
                 }
                 batch = null;

@@ -43,6 +43,7 @@ import org.apache.graphar.io.ColumnType;
 import org.apache.graphar.io.Field;
 import org.apache.graphar.io.ReadCapability;
 import org.apache.graphar.io.RecordBatch;
+import org.apache.graphar.io.RecordBatches;
 import org.apache.graphar.io.Schema;
 import org.apache.graphar.io.WriteMode;
 import org.apache.graphar.io.WriteRequest;
@@ -175,7 +176,7 @@ public class S3IcebergTopologyExportEndToEndTest {
         new ParquetPhysicalWriter(storage)
                 .write(
                         new WriteRequest(dataUri, INPUT_SCHEMA, WriteMode.CREATE_NEW),
-                        new SingleBatchCursor(new Rows(INPUT_SCHEMA, rows)));
+                        new SingleBatchCursor(RecordBatches.ofArrays(INPUT_SCHEMA, values(rows))));
         table.newAppend()
                 .appendFile(
                         DataFiles.builder(table.spec())
@@ -218,41 +219,21 @@ public class S3IcebergTopologyExportEndToEndTest {
         }
     }
 
-    private static final class Row implements org.apache.graphar.io.Row {
-        private final Object[] values;
-
-        private Row(long source, long destination) {
-            this.values = new Object[] {source, destination};
+    private static List<Object[]> values(List<Row> rows) {
+        List<Object[]> values = new ArrayList<>(rows.size());
+        for (Row row : rows) {
+            values.add(new Object[] {row.source, row.destination});
         }
-
-        @Override
-        public Object value(int index) {
-            return values[index];
-        }
+        return values;
     }
 
-    private static final class Rows implements RecordBatch {
-        private final Schema schema;
-        private final List<Row> rows;
+    private static final class Row {
+        private final long source;
+        private final long destination;
 
-        private Rows(Schema schema, List<Row> rows) {
-            this.schema = schema;
-            this.rows = rows;
-        }
-
-        @Override
-        public Schema schema() {
-            return schema;
-        }
-
-        @Override
-        public int rowCount() {
-            return rows.size();
-        }
-
-        @Override
-        public org.apache.graphar.io.Row row(int index) {
-            return rows.get(index);
+        private Row(long source, long destination) {
+            this.source = source;
+            this.destination = destination;
         }
     }
 

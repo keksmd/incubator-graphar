@@ -404,6 +404,42 @@ public class GraphInfo {
         return extraInfo;
     }
 
+    /**
+     * Returns an immutable graph definition with {@code additions} merged into its extra metadata.
+     */
+    public GraphInfo withExtraInfo(Map<String, String> additions) {
+        if (additions == null || additions.isEmpty()) {
+            return this;
+        }
+        Map<String, String> merged = new LinkedHashMap<>(extraInfo);
+        additions.forEach(
+                (key, value) -> {
+                    if (key == null || key.isBlank() || value == null || value.isBlank()) {
+                        throw new IllegalArgumentException(
+                                "Graph extra metadata must contain non-blank key/value pairs.");
+                    }
+                    merged.put(key, value);
+                });
+        GraphInfo copy =
+                new GraphInfo(
+                        name,
+                        List.copyOf(vertexInfos),
+                        List.copyOf(edgeInfos),
+                        baseUri,
+                        version,
+                        Map.copyOf(vertexType2VertexInfo),
+                        Map.copyOf(edgeConcat2EdgeInfo),
+                        List.copyOf(labels),
+                        Collections.unmodifiableMap(merged));
+        for (VertexInfo vertexInfo : vertexInfos) {
+            copy.setStoreUri(vertexInfo, getStoreUri(vertexInfo));
+        }
+        for (EdgeInfo edgeInfo : edgeInfos) {
+            copy.setStoreUri(edgeInfo, getStoreUri(edgeInfo));
+        }
+        return copy;
+    }
+
     public void setStoreUri(VertexInfo vertexInfo, URI storeUri) {
         this.types2StoreUri.put(vertexInfo.getType() + ".vertex", storeUri);
     }

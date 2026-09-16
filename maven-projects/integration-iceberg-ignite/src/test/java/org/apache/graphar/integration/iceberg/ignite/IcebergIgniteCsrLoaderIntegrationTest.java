@@ -38,6 +38,7 @@ import org.apache.graphar.io.BatchCursor;
 import org.apache.graphar.io.ColumnType;
 import org.apache.graphar.io.Field;
 import org.apache.graphar.io.RecordBatch;
+import org.apache.graphar.io.RecordBatches;
 import org.apache.graphar.io.Schema;
 import org.apache.graphar.io.WriteMode;
 import org.apache.graphar.io.WriteRequest;
@@ -211,7 +212,8 @@ public class IcebergIgniteCsrLoaderIntegrationTest {
         new ParquetPhysicalWriter(storage)
                 .write(
                         new WriteRequest(uri, TOPOLOGY_SCHEMA, WriteMode.CREATE_NEW),
-                        new SingleBatchCursor(new Rows(rows)));
+                        new SingleBatchCursor(
+                                RecordBatches.ofArrays(TOPOLOGY_SCHEMA, values(rows))));
         table.newAppend()
                 .appendFile(
                         DataFiles.builder(table.spec())
@@ -288,41 +290,21 @@ public class IcebergIgniteCsrLoaderIntegrationTest {
         }
     }
 
-    private static final class TopologyRow implements org.apache.graphar.io.Row {
+    private static List<Object[]> values(List<TopologyRow> rows) {
+        List<Object[]> values = new ArrayList<>(rows.size());
+        for (TopologyRow row : rows) {
+            values.add(new Object[] {row.source, row.destination});
+        }
+        return values;
+    }
+
+    private static final class TopologyRow {
         private final long source;
         private final long destination;
 
         private TopologyRow(long source, long destination) {
             this.source = source;
             this.destination = destination;
-        }
-
-        @Override
-        public Object value(int index) {
-            return index == 0 ? source : destination;
-        }
-    }
-
-    private static final class Rows implements RecordBatch {
-        private final List<TopologyRow> rows;
-
-        private Rows(List<TopologyRow> rows) {
-            this.rows = rows;
-        }
-
-        @Override
-        public Schema schema() {
-            return TOPOLOGY_SCHEMA;
-        }
-
-        @Override
-        public int rowCount() {
-            return rows.size();
-        }
-
-        @Override
-        public org.apache.graphar.io.Row row(int index) {
-            return rows.get(index);
         }
     }
 
