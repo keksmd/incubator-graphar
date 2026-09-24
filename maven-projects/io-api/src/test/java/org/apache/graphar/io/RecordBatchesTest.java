@@ -88,4 +88,78 @@ public class RecordBatchesTest {
                 UnsupportedOperationException.class,
                 () -> ((List<Object>) vector.getObject(0)).add("z"));
     }
+
+    @Test
+    public void keepsNullElementsOfANullableElementList() {
+        Field field =
+                new Field("tags", ColumnType.listOf(ColumnType.of(ColumnType.Kind.STRING)), true);
+
+        ObjectValueVector vector = new ObjectValueVector(field, List.of(Arrays.asList("x", null)));
+
+        assertEquals(Arrays.asList("x", null), vector.getObject(0));
+    }
+
+    @Test
+    public void rejectsANullElementOfARequiredElementList() {
+        Field field =
+                new Field(
+                        "tags",
+                        ColumnType.listOfElement(
+                                new Field("element", ColumnType.of(ColumnType.Kind.STRING), false)),
+                        true);
+
+        IllegalArgumentException error =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> new ObjectValueVector(field, List.of(Arrays.asList("x", null))));
+        assertTrue(error.getMessage(), error.getMessage().contains("'tags' index 0"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void snapshotsNestedListsAtEveryDepth() {
+        Field field =
+                new Field(
+                        "matrix",
+                        ColumnType.listOf(ColumnType.listOf(ColumnType.of(ColumnType.Kind.INT64))),
+                        true);
+        List<Object> inner = new ArrayList<>(List.of(1L));
+        ObjectValueVector vector = new ObjectValueVector(field, List.of(List.of(inner)));
+        inner.add(2L);
+
+        List<Object> outer = (List<Object>) vector.getObject(0);
+        assertEquals(List.of(List.of(1L)), outer);
+        assertThrows(
+                UnsupportedOperationException.class, () -> ((List<Object>) outer.get(0)).add(3L));
+    }
+
+    @Test
+    public void rejectsANullInANonNullableColumn() {
+        IllegalArgumentException error =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () ->
+                                RecordBatches.ofRows(
+                                        SCHEMA,
+                                        List.of(Arrays.asList(1L, "a"), Arrays.asList(null, "b"))));
+        assertTrue(error.getMessage(), error.getMessage().contains("'id' index 1"));
+    }
+
+    @Test
+    public void rejectsAValueOfTheWrongType() {
+        IllegalArgumentException error =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> RecordBatches.ofRows(SCHEMA, List.of(Arrays.asList("1", "a"))));
+        assertTrue(error.getMessage(), error.getMessage().contains("String is not a INT64"));
+    }
+
+    @Test
+    public void rejectsAnIntegerOutsideItsKind() {
+        Field field = new Field("small", ColumnType.of(ColumnType.Kind.INT8), false);
+
+        assertThrows(
+                IllegalArgumentException.class, () -> new ObjectValueVector(field, List.of(128)));
+        assertEquals((byte) -128, new ObjectValueVector(field, List.of((byte) -128)).getObject(0));
+    }
 }
