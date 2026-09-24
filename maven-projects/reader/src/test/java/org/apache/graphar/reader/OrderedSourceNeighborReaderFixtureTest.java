@@ -52,7 +52,7 @@ public class OrderedSourceNeighborReaderFixtureTest {
             UnsupportedOperationException error =
                     assertThrows(UnsupportedOperationException.class, cursor::next);
             assertEquals(
-                    "Physical Parquet row ranges require an Offset Index; refusing JVM fallback.",
+                    "A partial row-group range requires a Parquet Offset Index; refusing JVM fallback.",
                     error.getMessage());
         }
 

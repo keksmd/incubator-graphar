@@ -281,7 +281,7 @@ public class EdgePropertyCursorStreamingTest {
     private static RecordBatch batch(ReadRequest request, long start, long end) {
         List<Field> fields = new ArrayList<>();
         for (ColumnRef column : request.projection().columns()) {
-            fields.add(new Field(column.name(), ColumnType.of(ColumnType.Kind.INT64), false));
+            fields.add(new Field(column.name(), ColumnType.of(kind(column.name())), false));
         }
         Schema schema = new Schema(fields);
         int rowCount = Math.toIntExact(end - start);
@@ -294,6 +294,16 @@ public class EdgePropertyCursorStreamingTest {
             columns.add(new ObjectValueVector(field, values));
         }
         return new VectorRecordBatch(schema, columns, rowCount);
+    }
+
+    private static ColumnType.Kind kind(String column) {
+        if ("weight".equals(column)) {
+            return ColumnType.Kind.FLOAT64;
+        }
+        if (column.startsWith("_graphAr")) {
+            return ColumnType.Kind.INT64;
+        }
+        return ColumnType.Kind.STRING;
     }
 
     private static Object value(String column, long row) {
