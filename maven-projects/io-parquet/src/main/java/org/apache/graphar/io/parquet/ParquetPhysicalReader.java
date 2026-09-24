@@ -59,23 +59,26 @@ public final class ParquetPhysicalReader implements PhysicalReader {
                             ReadCapability.ROW_RANGE,
                             ReadCapability.LIMIT));
 
-    private static final int DEFAULT_FOOTER_CACHE_CAPACITY = 256;
-
     private final Storage storage;
     private final FooterCache footers;
 
     /**
-     * Creates a reader that resolves each request URI through {@code storage} and remembers the
-     * footers of recently read files.
+     * Creates a reader that resolves each request URI through {@code storage} and parses the footer
+     * of every file it opens.
      */
     public ParquetPhysicalReader(Storage storage) {
-        this(storage, DEFAULT_FOOTER_CACHE_CAPACITY);
+        this(storage, 0);
     }
 
     /**
-     * Creates a reader that keeps at most {@code footerCacheCapacity} Parquet footers in memory.
-     * GraphAr chunk files are immutable once published, so repeated range reads of one chunk parse
-     * its footer once. A capacity of zero parses the footer on every request.
+     * Creates a reader that keeps at most {@code footerCacheCapacity} Parquet footers in memory, so
+     * repeated range reads of one file parse its footer once. A capacity of zero parses the footer
+     * on every request.
+     *
+     * <p>A remembered footer is keyed by URI and file size only. The caller must guarantee that no
+     * file read through this reader is rewritten in place while the reader is in use: a file
+     * replaced with different content of the same size would be read with a stale footer. Use a
+     * non-zero capacity only for immutable, published datasets.
      *
      * @param storage resolves each request URI to a readable file
      * @param footerCacheCapacity maximum number of remembered footers
@@ -286,10 +289,14 @@ public final class ParquetPhysicalReader implements PhysicalReader {
             throw new IllegalArgumentException("Unsupported Parquet LIST field: " + type);
         }
         Type element = repeated.asGroupType().getType(0);
-        if (!element.isPrimitive() || !element.isRepetition(Type.Repetition.REPEATED)) {
+        if (!element.isPrimitive() || element.isRepetition(Type.Repetition.REPEATED)) {
             throw new IllegalArgumentException("Unsupported Parquet LIST field: " + type);
         }
-        return ColumnType.listOf(primitiveType(element.asPrimitiveType()));
+        return ColumnType.listOfElement(
+                new Field(
+                        "element",
+                        primitiveType(element.asPrimitiveType()),
+                        element.isRepetition(Type.Repetition.OPTIONAL)));
     }
 
     private static ColumnType primitiveType(PrimitiveType type) {

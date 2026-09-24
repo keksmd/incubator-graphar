@@ -120,19 +120,20 @@ public final class ParquetPhysicalWriter implements PhysicalWriter {
     }
 
     private static Type listType(Field field) {
-        ColumnType element = field.type().elementType().orElseThrow();
-        Type value = listElementType(element);
+        Field element = field.type().children().get(0);
         return (field.nullable() ? Types.optionalList() : Types.requiredList())
-                .element(value)
+                .element(listElementType(element))
                 .named(field.name());
     }
 
-    private static Type listElementType(ColumnType element) {
-        LogicalTypeAnnotation logical = logicalType(element);
-        if (logical == null) {
-            return Types.repeated(physicalType(element)).named("element");
+    private static Type listElementType(Field element) {
+        Types.PrimitiveBuilder<PrimitiveType> builder =
+                Types.primitive(physicalType(element.type()), repetition(element));
+        LogicalTypeAnnotation logical = logicalType(element.type());
+        if (logical != null) {
+            builder.as(logical);
         }
-        return Types.repeated(physicalType(element)).as(logical).named("element");
+        return builder.named("element");
     }
 
     private static PrimitiveType.PrimitiveTypeName physicalType(ColumnType type) {
@@ -268,13 +269,15 @@ public final class ParquetPhysicalWriter implements PhysicalWriter {
                     "Unexpected value for " + field.name() + ": expected List");
         }
         Group list = group.addGroup(field.name());
-        Field element = new Field("element", field.type().elementType().orElseThrow(), false);
+        Field element = field.type().children().get(0);
         for (Object elementValue : (List<?>) value) {
-            if (elementValue == null) {
+            Group repeated = list.addGroup("list");
+            if (elementValue != null) {
+                add(repeated, element, elementValue);
+            } else if (!element.nullable()) {
                 throw new IllegalArgumentException(
-                        "Parquet LIST elements cannot be null: " + field.name());
+                        "Required LIST element is null: " + field.name());
             }
-            add(list.addGroup("list"), element, elementValue);
         }
     }
 

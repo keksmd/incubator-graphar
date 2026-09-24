@@ -60,6 +60,7 @@ final class ParquetOutputFile implements org.apache.parquet.io.OutputFile {
 
     private static final class ParquetPositionOutputStream extends PositionOutputStream {
         private final PositionOutput output;
+        private final byte[] single = new byte[1];
 
         private ParquetPositionOutputStream(PositionOutput output) {
             this.output = output;
@@ -72,7 +73,8 @@ final class ParquetOutputFile implements org.apache.parquet.io.OutputFile {
 
         @Override
         public void write(int value) throws IOException {
-            output.write(new byte[] {(byte) value});
+            single[0] = (byte) value;
+            output.write(single);
         }
 
         @Override

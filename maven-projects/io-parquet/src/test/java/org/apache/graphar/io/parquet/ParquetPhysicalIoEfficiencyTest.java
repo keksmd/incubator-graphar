@@ -141,7 +141,7 @@ public class ParquetPhysicalIoEfficiencyTest {
             assertEquals(RANGE_ROWS, readRange(uncached, uri));
             Counters repeatedWithoutCache = storage.inputCounters();
 
-            ParquetPhysicalReader cached = new ParquetPhysicalReader(storage);
+            ParquetPhysicalReader cached = new ParquetPhysicalReader(storage, 16);
             assertEquals(RANGE_ROWS, readRange(cached, uri));
             storage.resetInputCounters();
             assertEquals(RANGE_ROWS, readRange(cached, uri));

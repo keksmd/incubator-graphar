@@ -32,6 +32,9 @@ public final class RecordBatches {
      * @param schema the batch schema; every row must hold one value per field
      * @param rows the rows, each a list of boxed values in schema order
      * @return a batch backed by {@link ObjectValueVector} columns
+     * @throws IllegalArgumentException if a row has the wrong width, or a value is null in a
+     *     non-nullable field or has a Java type the field does not accept; see {@link
+     *     ObjectValueVector}
      */
     public static RecordBatch ofRows(Schema schema, List<? extends List<?>> rows) {
         Objects.requireNonNull(schema, "A batch schema cannot be null.");
@@ -64,6 +67,7 @@ public final class RecordBatches {
      * @param schema the batch schema; every row must hold one value per field
      * @param rows the rows, each an array of boxed values in schema order
      * @return a batch backed by {@link ObjectValueVector} columns
+     * @throws IllegalArgumentException under the same conditions as {@link #ofRows(Schema, List)}
      */
     public static RecordBatch ofArrays(Schema schema, List<Object[]> rows) {
         Objects.requireNonNull(rows, "Batch rows cannot be null.");

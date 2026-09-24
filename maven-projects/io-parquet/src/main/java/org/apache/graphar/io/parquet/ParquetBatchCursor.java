@@ -97,7 +97,7 @@ final class ParquetBatchCursor implements BatchCursor {
             current = null;
             return false;
         }
-        if (emitted == limit) {
+        if (limit == 0) {
             finish();
             return false;
         }
@@ -120,7 +120,10 @@ final class ParquetBatchCursor implements BatchCursor {
                     closePages();
                 }
                 current = batch(columns, batchSize);
-                if (emitted == limit) exhausted = true;
+                if (emitted == limit) {
+                    exhausted = true;
+                    closeReader();
+                }
                 return true;
             }
         } catch (MissingOffsetIndexException exception) {
@@ -130,7 +133,7 @@ final class ParquetBatchCursor implements BatchCursor {
                 exception.addSuppressed(closeException);
             }
             throw new UnsupportedOperationException(
-                    "Physical Parquet row ranges require an Offset Index; refusing JVM fallback.",
+                    "A partial row-group range requires a Parquet Offset Index; refusing JVM fallback.",
                     exception);
         } catch (IOException | RuntimeException exception) {
             try {
@@ -175,26 +178,28 @@ final class ParquetBatchCursor implements BatchCursor {
     }
 
     private static List<Object> listValue(Group group, int index, ParquetColumn column) {
-        Group list = group.getGroup(index, 0);
-        if (list.getType().getFieldCount() != 1) {
+        Group listGroup = group.getGroup(index, 0);
+        if (listGroup.getType().getFieldCount() != 1) {
             throw new IllegalArgumentException(
                     "Unsupported Parquet LIST field: " + column.field().name());
         }
-        int count = list.getFieldRepetitionCount(0);
+        int count = listGroup.getFieldRepetitionCount(0);
         if (count == 0) {
             return List.of();
         }
         List<Object> values = new ArrayList<>(count);
-        org.apache.graphar.io.ColumnType element =
+        org.apache.graphar.io.ColumnType elementType =
                 column.field().type().elementType().orElseThrow();
-        for (int elementIndex = 0; elementIndex < count; elementIndex++) {
-            Group elementGroup = list.getGroup(0, elementIndex);
-            if (elementGroup.getType().getFieldCount() != 1
-                    || elementGroup.getFieldRepetitionCount(0) != 1) {
+        for (int position = 0; position < count; position++) {
+            Group repeatedGroup = listGroup.getGroup(0, position);
+            if (repeatedGroup.getType().getFieldCount() != 1) {
                 throw new IllegalArgumentException(
                         "Unsupported Parquet LIST element: " + column.field().name());
             }
-            values.add(scalarValue(elementGroup, 0, element, 0));
+            values.add(
+                    repeatedGroup.getFieldRepetitionCount(0) == 0
+                            ? null
+                            : scalarValue(repeatedGroup, 0, elementType, 0));
         }
         return Collections.unmodifiableList(values);
     }
@@ -271,11 +276,13 @@ final class ParquetBatchCursor implements BatchCursor {
         BlockRange rowGroup = nextRange();
         if (rowGroup == null) return false;
         pages =
-                fileReader.readFilteredRowGroup(
-                        rowGroup.index,
-                        RowRanges.builder()
-                                .addSelectedRange(rowGroup.start, rowGroup.end - 1)
-                                .build());
+                rowGroup.whole
+                        ? fileReader.readRowGroup(rowGroup.index)
+                        : fileReader.readFilteredRowGroup(
+                                rowGroup.index,
+                                RowRanges.builder()
+                                        .addSelectedRange(rowGroup.start, rowGroup.end - 1)
+                                        .build());
         MessageColumnIO columnIO = new ColumnIOFactory().getColumnIO(readSchema, fileSchema);
         rows = columnIO.getRecordReader(pages, new GroupRecordConverter(readSchema));
         rowsRemainingInGroup = pages.getRowCount();
@@ -319,7 +326,11 @@ final class ParquetBatchCursor implements BatchCursor {
             long begin = Math.max(rangeStart, rowGroup.start);
             long end = Math.min(rangeEnd, rowGroup.end);
             if (begin < end) {
-                return new BlockRange(rowGroup.index, begin - rowGroup.start, end - rowGroup.start);
+                return new BlockRange(
+                        rowGroup.index,
+                        begin - rowGroup.start,
+                        end - rowGroup.start,
+                        begin == rowGroup.start && end == rowGroup.end);
             }
         }
         return null;
@@ -330,7 +341,7 @@ final class ParquetBatchCursor implements BatchCursor {
         long start = 0;
         for (int index = 0; index < blocks.size(); index++) {
             long end = Math.addExact(start, blocks.get(index).getRowCount());
-            result.add(new BlockRange(index, start, end));
+            result.add(new BlockRange(index, start, end, true));
             start = end;
         }
         return List.copyOf(result);
@@ -340,11 +351,13 @@ final class ParquetBatchCursor implements BatchCursor {
         private final int index;
         private final long start;
         private final long end;
+        private final boolean whole;
 
-        private BlockRange(int index, long start, long end) {
+        private BlockRange(int index, long start, long end, boolean whole) {
             this.index = index;
             this.start = start;
             this.end = end;
+            this.whole = whole;
         }
     }
 }
